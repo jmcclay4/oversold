@@ -153,7 +153,7 @@ async def get_metadata():
 async def update_database():
     logger.info("Received request to update database")
     try:
-        initialize_database()
+        init_db()
         logger.info("Database update completed successfully")
         return {"status": "success", "message": "Database updated"}
     except Exception as e:
