@@ -7,7 +7,7 @@ from typing import List
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 import uvicorn
-from init_db import initialize_database
+from init_db import init_db
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
