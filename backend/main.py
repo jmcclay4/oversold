@@ -7,7 +7,7 @@ from typing import List
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 import uvicorn
-from init_db import init_db, update_data
+from init_db import init_db, update_data, rebuild_database
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -211,6 +211,17 @@ async def update_database():
     except Exception as e:
         logger.error(f"Error updating database: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update database: {str(e)}")
+
+@app.post("/rebuild-db")
+async def rebuild_database_endpoint():
+    logger.info("Received request to rebuild database")
+    try:
+        rebuild_database()
+        logger.info("Database rebuild completed successfully")
+        return {"status": "success", "message": "Database rebuilt with S&P 500 data"}
+    except Exception as e:
+        logger.error(f"Error rebuilding database: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to rebuild database: {str(e)}")
 
 if __name__ == "__main__":
     logger.info("Starting Uvicorn server...")

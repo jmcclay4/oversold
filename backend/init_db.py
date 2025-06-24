@@ -78,6 +78,43 @@ def init_db():
     finally:
         conn.close()
 
+def rebuild_database():
+    logger.info("Starting database rebuild...")
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        # Drop existing tables
+        cursor.execute("DROP TABLE IF EXISTS ohlcv")
+        cursor.execute("DROP TABLE IF EXISTS company_names")
+        cursor.execute("DROP TABLE IF EXISTS metadata")
+        conn.commit()
+        logger.info("Existing tables dropped")
+        # Recreate tables
+        init_db()
+        # Populate with S&P 500 tickers
+        tickers = fetch_sp500_tickers()
+        logger.info(f"Populating database with {len(tickers)} S&P 500 tickers")
+        end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')  # Yesterday: 2025-06-23
+        start_date = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
+        batch_size = 50
+        for i in range(0, len(tickers), batch_size):
+            batch = tickers[i:i + batch_size]
+            logger.info(f"Processing batch {i//batch_size + 1} with tickers: {batch}")
+            for ticker in batch:
+                logger.info(f"Fetching initial data for {ticker} from {start_date} to {end_date}")
+                df = fetch_yfinance_data(ticker, start_date, end_date)
+                logger.info(f"Fetched {len(df)} rows for {ticker}, last date: {df['Date'].iloc[-1] if not df.empty else 'empty'}")
+                store_stock_data(ticker, df)
+                time.sleep(1)
+        update_metadata()
+        logger.info("Database rebuild completed")
+    except Exception as e:
+        logger.error(f"Error rebuilding database: {e}")
+        raise
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
 def update_metadata():
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -199,12 +236,10 @@ def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataF
                 company_name = stock.info.get('longName', f"{ticker} Inc.")
                 store_company_name(ticker, company_name)
             df['company_name'] = company_name
-            # Validate data before calculating indicators
             required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
             if not all(col in df.columns for col in required_columns) or df[required_columns].isnull().any().any():
                 logger.warning(f"Invalid or missing OHLCV data for {ticker}")
                 return pd.DataFrame()
-            # Calculate indicators
             adx, pdi, mdi = calculate_adx_dmi(df)
             k, d = calculate_stochastic(df)
             df['adx'] = adx
@@ -212,7 +247,6 @@ def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataF
             df['mdi'] = mdi
             df['k'] = k
             df['d'] = d
-            # Check for NaN in indicators
             if df[['adx', 'pdi', 'mdi', 'k', 'd']].iloc[-1].isnull().any():
                 logger.warning(f"NaN detected in indicators for {ticker} on {df['Date'].iloc[-1]}")
             logger.info(f"Last row for {ticker}: Date={df['Date'].iloc[-1]}, ADX={df['adx'].iloc[-1]}, %K={df['k'].iloc[-1]}")
@@ -289,7 +323,7 @@ def update_data(batch_size: int = 50):
     try:
         tickers = get_all_tickers()
         logger.info(f"Processing {len(tickers)} tickers from database")
-        end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')  # Yesterday
+        end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         for i in range(0, len(tickers), batch_size):
             batch = tickers[i:i + batch_size]
             logger.info(f"Processing batch {i//batch_size + 1} with tickers: {batch}")
