@@ -3,7 +3,7 @@ import { StockAnalysisTable } from './components/StockAnalysisTable';
 import { StockChart } from './components/StockChart';
 import { LoadingSpinner } from './components/LoadingSpinner';
 import { ErrorMessage } from './components/ErrorMessage';
-import { analyzeTrackedStocks, fetchAllTickers, fetchMetadata } from './services/stockDataService';
+import { analyzeTrackedStocks, fetchAllTickers, fetchMetadata, analyzeStockTicker } from './services/stockDataService';
 import { StockAnalysisResult, FilterCriteria } from './types';
 
 const App: React.FC = () => {
@@ -52,9 +52,19 @@ const App: React.FC = () => {
     });
   }, []);
 
-  const handleSelectStockForChart = useCallback((ticker: string) => {
+  const handleSelectStockForChart = useCallback(async (ticker: string) => {
     console.log('Selected ticker for chart:', ticker);
     setSelectedTickerForChart(ticker);
+    try {
+      const stockData = await analyzeStockTicker(ticker);
+      setAllAnalysisResults(prev => {
+        const updated = prev.filter(r => r.ticker !== ticker);
+        updated.push(stockData);
+        return updated;
+      });
+    } catch (err) {
+      console.error(`Error fetching chart data for ${ticker}:`, err);
+    }
   }, []);
 
   const addTicker = async () => {
@@ -62,8 +72,8 @@ const App: React.FC = () => {
     if (ticker && !customTickers.includes(ticker)) {
       try {
         console.log('Adding ticker:', ticker);
-        const result = await analyzeTrackedStocks([ticker]);
-        if (!result[0].error) {
+        const result = await analyzeStockTicker(ticker);
+        if (!result.error) {
           setCustomTickers(prev => [...prev, ticker]);
           setNewTicker('');
         } else {
@@ -95,7 +105,6 @@ const App: React.FC = () => {
       console.log('Loaded stocks:', results.length, results.slice(0, 3));
       setAllAnalysisResults(results);
 
-      // Fetch metadata
       const metadata = await fetchMetadata();
       console.log('Fetched metadata:', metadata);
       setLastOhlcvUpdate(metadata.last_ohlcv_update || 'Unknown');
@@ -148,8 +157,6 @@ const App: React.FC = () => {
     console.log('Chart data for:', selectedTickerForChart, stock);
     return stock || null;
   }, [selectedTickerForChart, allAnalysisResults]);
-
-  console.log('Rendering App, isLoading:', isLoading, 'globalError:', globalError, 'allAnalysisResults:', allAnalysisResults.length);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 text-gray-200 p-4 sm:p-6 flex flex-col">
