@@ -1,4 +1,6 @@
 fastapi
 uvicorn
+sqlite3
 yfinance
 pandas
+numpy

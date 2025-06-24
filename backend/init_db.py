@@ -7,28 +7,12 @@ import logging
 import os
 import time
 from typing import List
-import requests
-from bs4 import BeautifulSoup
+from sp500_tickers import SP500_TICKERS
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "stocks.db")
-
-def fetch_sp500_tickers() -> List[str]:
-    logger.info("Fetching S&P 500 tickers from Wikipedia...")
-    try:
-        url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        response = requests.get(url)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        table = soup.find('table', {'id': 'constituents'})
-        df = pd.read_html(str(table))[0]
-        tickers = df['Symbol'].str.replace('.', '-', regex=False).tolist()
-        logger.info(f"Retrieved {len(tickers)} S&P 500 tickers")
-        return tickers
-    except Exception as e:
-        logger.error(f"Error fetching S&P 500 tickers: {e}")
-        return ["MMM", "AOS", "ABT", "TSLA", "ABBV"]
 
 def init_db():
     logger.info("Starting init_db function...")
@@ -83,20 +67,17 @@ def rebuild_database():
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        # Drop existing tables
         cursor.execute("DROP TABLE IF EXISTS ohlcv")
         cursor.execute("DROP TABLE IF EXISTS company_names")
         cursor.execute("DROP TABLE IF EXISTS metadata")
         conn.commit()
         logger.info("Existing tables dropped")
-        # Recreate tables
         init_db()
-        # Populate with S&P 500 tickers
-        tickers = fetch_sp500_tickers()
+        tickers = SP500_TICKERS
         logger.info(f"Populating database with {len(tickers)} S&P 500 tickers")
-        end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')  # Yesterday: 2025-06-23
+        end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
-        batch_size = 50
+        batch_size = 100
         for i in range(0, len(tickers), batch_size):
             batch = tickers[i:i + batch_size]
             logger.info(f"Processing batch {i//batch_size + 1} with tickers: {batch}")
@@ -105,7 +86,7 @@ def rebuild_database():
                 df = fetch_yfinance_data(ticker, start_date, end_date)
                 logger.info(f"Fetched {len(df)} rows for {ticker}, last date: {df['Date'].iloc[-1] if not df.empty else 'empty'}")
                 store_stock_data(ticker, df)
-                time.sleep(1)
+                time.sleep(0.2)
         update_metadata()
         logger.info("Database rebuild completed")
     except Exception as e:
@@ -167,58 +148,66 @@ def get_all_tickers() -> List[str]:
         tickers = [row[0] for row in cursor.fetchall()]
         logger.info(f"Retrieved {len(tickers)} tickers from database: {tickers}")
         if not tickers:
-            logger.warning("No tickers found in database, fetching S&P 500 tickers")
-            tickers = fetch_sp500_tickers()
+            logger.warning("No tickers found in database, using S&P 500 tickers")
+            tickers = SP500_TICKERS
         return tickers
     except Exception as e:
         logger.error(f"Error retrieving tickers: {e}")
-        return fetch_sp500_tickers()
+        return SP500_TICKERS
 
 def calculate_adx_dmi(df: pd.DataFrame, dmi_period: int = 14, adx_period: int = 14):
     logger.info("Calculating ADX and DMI...")
-    high = df['High'].values
-    low = df['Low'].values
-    close = df['Close'].values
-    n = len(df)
-    if n < dmi_period + adx_period - 1:
-        logger.warning(f"Not enough data for ADX/DMI calculation (need {dmi_period + adx_period - 1}, got {n})")
-        return np.array([None] * n), np.array([None] * n), np.array([None] * n)
-    
-    tr = np.zeros(n)
-    dm_plus = np.zeros(n)
-    dm_minus = np.zeros(n)
-    for i in range(1, n):
-        h_diff = high[i] - high[i-1]
-        l_diff = low[i-1] - low[i]
-        tr[i] = max(high[i] - low[i], abs(h_diff), abs(l_diff))
-        dm_plus[i] = h_diff if h_diff > l_diff and h_diff > 0 else 0
-        dm_minus[i] = l_diff if l_diff > h_diff and l_diff > 0 else 0
-    
-    atr = pd.Series(tr).rolling(window=dmi_period, min_periods=dmi_period).mean().values
-    di_plus = 100 * pd.Series(dm_plus).rolling(window=dmi_period, min_periods=dmi_period).mean() / (atr + 1e-10)
-    di_minus = 100 * pd.Series(dm_minus).rolling(window=dmi_period, min_periods=dmi_period).mean() / (atr + 1e-10)
-    dx = 100 * np.abs(di_plus - di_minus) / (di_plus + di_minus + 1e-10)
-    adx = pd.Series(dx).rolling(window=adx_period, min_periods=adx_period).mean().values
-    logger.info(f"ADX for last row: {adx[-1] if n > 0 else None}, PDI: {di_plus[-1] if n > 0 else None}, MDI: {di_minus[-1] if n > 0 else None}")
-    return adx, di_plus, di_minus
+    try:
+        high = df['High'].values
+        low = df['Low'].values
+        close = df['Close'].values
+        n = len(df)
+        if n < dmi_period + adx_period - 1:
+            logger.warning(f"Not enough data for ADX/DMI calculation (need {dmi_period + adx_period - 1}, got {n})")
+            return np.array([None] * n), np.array([None] * n), np.array([None] * n)
+        
+        tr = np.zeros(n)
+        dm_plus = np.zeros(n)
+        dm_minus = np.zeros(n)
+        for i in range(1, n):
+            h_diff = high[i] - high[i-1]
+            l_diff = low[i-1] - low[i]
+            tr[i] = max(high[i] - low[i], abs(h_diff), abs(l_diff))
+            dm_plus[i] = h_diff if h_diff > l_diff and h_diff > 0 else 0
+            dm_minus[i] = l_diff if l_diff > h_diff and l_diff > 0 else 0
+        
+        atr = pd.Series(tr).rolling(window=dmi_period, min_periods=dmi_period).mean().values
+        di_plus = 100 * pd.Series(dm_plus).rolling(window=dmi_period, min_periods=dmi_period).mean() / (atr + 1e-10)
+        di_minus = 100 * pd.Series(dm_minus).rolling(window=dmi_period, min_periods=dmi_period).mean() / (atr + 1e-10)
+        dx = 100 * np.abs(di_plus - di_minus) / (di_plus + di_minus + 1e-10)
+        adx = pd.Series(dx).rolling(window=adx_period, min_periods=adx_period).mean().values
+        logger.info(f"ADX for last row: {adx[-1] if n > 0 else None}, PDI: {di_plus[-1] if n > 0 else None}, MDI: {di_minus[-1] if n > 0 else None}")
+        return adx, di_plus, di_minus
+    except Exception as e:
+        logger.error(f"Error in ADX/DMI calculation: {e}")
+        return np.array([None] * len(df)), np.array([None] * len(df)), np.array([None] * len(df))
 
 def calculate_stochastic(df: pd.DataFrame, k_period: int = 14, d_period: int = 3):
     logger.info("Calculating Stochastic...")
-    n = len(df)
-    if n < k_period + d_period - 1:
-        logger.warning(f"Not enough data for Stochastic calculation (need {k_period + d_period - 1}, got {n})")
-        return np.array([None] * n), np.array([None] * n)
-    
-    low_min = df['Low'].rolling(window=k_period, min_periods=k_period).min()
-    high_max = df['High'].rolling(window=k_period, min_periods=k_period).max()
-    k = 100 * (df['Close'] - low_min) / (high_max - low_min + 1e-10)
-    d = k.rolling(window=d_period, min_periods=d_period).mean()
-    logger.info(f"Stochastic %K for last row: {k.values[-1] if n > 0 else None}, %D: {d.values[-1] if n > 0 else None}")
-    return k.values, d.values
+    try:
+        n = len(df)
+        if n < k_period + d_period - 1:
+            logger.warning(f"Not enough data for Stochastic calculation (need {k_period + d_period - 1}, got {n})")
+            return np.array([None] * n), np.array([None] * n)
+        
+        low_min = df['Low'].rolling(window=k_period, min_periods=k_period).min()
+        high_max = df['High'].rolling(window=k_period, min_periods=k_period).max()
+        k = 100 * (df['Close'] - low_min) / (high_max - low_min + 1e-10)
+        d = k.rolling(window=d_period, min_periods=d_period).mean()
+        logger.info(f"Stochastic %K for last row: {k.values[-1] if n > 0 else None}, %D: {d.values[-1] if n > 0 else None}")
+        return k.values, d.values
+    except Exception as e:
+        logger.error(f"Error in Stochastic calculation: {e}")
+        return np.array([None] * len(df)), np.array([None] * len(df))
 
 def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataFrame:
     retries = 3
-    delay = 2
+    delay = 0.2
     cached_name = get_cached_company_name(ticker)
     company_name = cached_name or f"{ticker} Inc."
     for attempt in range(1, retries + 1):
@@ -227,7 +216,8 @@ def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataF
             stock = yf.Ticker(ticker)
             df = stock.history(start=start_date, end=end_date, auto_adjust=True)
             if df.empty:
-                raise ValueError(f"No data found for {ticker}")
+                logger.warning(f"No data found for {ticker}")
+                return pd.DataFrame()
             df = df.reset_index()
             df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
             df = df.sort_values('Date').drop_duplicates('Date', keep='last')
@@ -240,8 +230,13 @@ def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataF
             if not all(col in df.columns for col in required_columns) or df[required_columns].isnull().any().any():
                 logger.warning(f"Invalid or missing OHLCV data for {ticker}")
                 return pd.DataFrame()
-            adx, pdi, mdi = calculate_adx_dmi(df)
-            k, d = calculate_stochastic(df)
+            # Calculate indicators, but store OHLCV even if calculations fail
+            try:
+                adx, pdi, mdi = calculate_adx_dmi(df)
+                k, d = calculate_stochastic(df)
+            except Exception as e:
+                logger.error(f"Indicator calculation failed for {ticker}: {e}")
+                adx = pdi = mdi = k = d = np.array([None] * len(df))
             df['adx'] = adx
             df['pdi'] = pdi
             df['mdi'] = mdi
@@ -249,7 +244,8 @@ def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataF
             df['d'] = d
             if df[['adx', 'pdi', 'mdi', 'k', 'd']].iloc[-1].isnull().any():
                 logger.warning(f"NaN detected in indicators for {ticker} on {df['Date'].iloc[-1]}")
-            logger.info(f"Last row for {ticker}: Date={df['Date'].iloc[-1]}, ADX={df['adx'].iloc[-1]}, %K={df['k'].iloc[-1]}")
+            else:
+                logger.info(f"Last row for {ticker}: Date={df['Date'].iloc[-1]}, ADX={df['adx'].iloc[-1]}, %K={df['k'].iloc[-1]}")
             return df
         except Exception as e:
             logger.error(f"Retry {attempt}/{retries} for {ticker}: {e}")
@@ -318,7 +314,7 @@ def delete_old_data(max_age_days: int = 180):
     finally:
         conn.close()
 
-def update_data(batch_size: int = 50):
+def update_data(batch_size: int = 100):
     logger.info("Updating stock data...")
     try:
         tickers = get_all_tickers()
@@ -340,7 +336,7 @@ def update_data(batch_size: int = 50):
                 df = fetch_yfinance_data(ticker, start_date, end_date)
                 logger.info(f"Fetched {len(df)} rows for {ticker}, last date: {df['Date'].iloc[-1] if not df.empty else 'empty'}")
                 store_stock_data(ticker, df)
-                time.sleep(1)
+                time.sleep(0.2)
         delete_old_data(max_age_days=180)
         update_metadata()
         logger.info("Data update completed")
