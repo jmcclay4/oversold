@@ -7,6 +7,7 @@ from typing import List
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 import uvicorn
+from init_db import initialize_database
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -16,22 +17,27 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "stocks.db")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting up FastAPI application")
-    if not os.path.exists(DB_PATH):
-        logger.error(f"Database file {DB_PATH} not found")
-        raise RuntimeError(f"Database file {DB_PATH} not found")
     try:
+        if not os.path.exists(DB_PATH):
+            logger.warning(f"Database file {DB_PATH} not found, initializing...")
+            initialize_database()
+            logger.info(f"Database initialized at {DB_PATH}")
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ohlcv'")
         if not cursor.fetchone():
-            logger.error("Table 'ohlcv' does not exist in database")
-            raise RuntimeError("Table 'ohlcv' does not exist in database")
-        logger.info("Database connection verified")
+            logger.warning("Table 'ohlcv' does not exist, initializing database...")
+            conn.close()
+            initialize_database()
+            logger.info("Database tables created")
+        else:
+            logger.info("Database connection verified")
     except Exception as e:
         logger.error(f"Error during startup: {e}")
         raise
     finally:
-        conn.close()
+        if 'conn' in locals():
+            conn.close()
     yield
     logger.info("Shutting down FastAPI application")
 
@@ -39,7 +45,7 @@ app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "https://your-frontend.onrender.com"],
+    allow_origins=["http://localhost:5173", "https://oversold.jmcclay.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -142,6 +148,17 @@ async def get_metadata():
         return MetadataResponse(last_ohlcv_update=None)
     finally:
         conn.close()
+
+@app.post("/update-db")
+async def update_database():
+    logger.info("Received request to update database")
+    try:
+        initialize_database()
+        logger.info("Database update completed successfully")
+        return {"status": "success", "message": "Database updated"}
+    except Exception as e:
+        logger.error(f"Error updating database: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update database: {str(e)}")
 
 if __name__ == "__main__":
     logger.info("Starting Uvicorn server...")
