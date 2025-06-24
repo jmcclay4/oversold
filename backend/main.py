@@ -45,7 +45,7 @@ app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "https://oversold.jmcclay.com", "*"],
+    allow_origins=["http://localhost:5173", "https://oversold.jmcclay.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -67,6 +67,11 @@ class OHLCV(BaseModel):
 
 class StockDataResponse(BaseModel):
     ohlcv: List[OHLCV]
+
+class BatchStockDataResponse(BaseModel):
+    ticker: str
+    company_name: str | None
+    latest_ohlcv: OHLCV | None
 
 class MetadataResponse(BaseModel):
     last_ohlcv_update: str | None
@@ -123,6 +128,53 @@ async def get_stock_data(ticker: str):
         return StockDataResponse(ohlcv=ohlcv_data)
     except Exception as e:
         logger.error(f"Error fetching data for {ticker}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+@app.post("/stocks/batch", response_model=List[BatchStockDataResponse])
+async def get_batch_stock_data(tickers: List[str]):
+    logger.info(f"Received batch request for {len(tickers)} tickers")
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        placeholders = ','.join(['?' for _ in tickers])
+        query = f"""
+            SELECT ticker, date, open, high, low, close, volume, company_name, adx, pdi, mdi, k, d
+            FROM ohlcv
+            WHERE ticker IN ({placeholders})
+            AND date = (
+                SELECT MAX(date)
+                FROM ohlcv
+                WHERE ticker = ohlcv.ticker
+            )
+        """
+        cursor.execute(query, tickers)
+        rows = cursor.fetchall()
+        results = []
+        for row in rows:
+            results.append(BatchStockDataResponse(
+                ticker=row[0],
+                company_name=row[7],
+                latest_ohlcv=OHLCV(
+                    date=row[1],
+                    open=row[2],
+                    high=row[3],
+                    low=row[4],
+                    close=row[5],
+                    volume=row[6],
+                    company_name=row[7],
+                    adx=row[8],
+                    pdi=row[9],
+                    mdi=row[10],
+                    k=row[11],
+                    d=row[12]
+                )
+            ))
+        logger.info(f"Returning data for {len(results)} tickers")
+        return results
+    except Exception as e:
+        logger.error(f"Error fetching batch data: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
