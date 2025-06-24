@@ -7,7 +7,7 @@ from typing import List
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 import uvicorn
-from init_db import init_db
+from init_db import init_db, update_data
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -205,7 +205,7 @@ async def get_metadata():
 async def update_database():
     logger.info("Received request to update database")
     try:
-        init_db()
+        update_data()
         logger.info("Database update completed successfully")
         return {"status": "success", "message": "Database updated"}
     except Exception as e:

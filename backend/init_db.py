@@ -7,22 +7,36 @@ import logging
 import os
 import time
 from typing import List
+import requests
+from bs4 import BeautifulSoup
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "stocks.db")
 
+def fetch_sp500_tickers() -> List[str]:
+    logger.info("Fetching S&P 500 tickers from Wikipedia...")
+    try:
+        url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+        response = requests.get(url)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        table = soup.find('table', {'id': 'constituents'})
+        df = pd.read_html(str(table))[0]
+        tickers = df['Symbol'].str.replace('.', '-', regex=False).tolist()  # Replace dots with hyphens for yfinance
+        logger.info(f"Retrieved {len(tickers)} S&P 500 tickers")
+        return tickers
+    except Exception as e:
+        logger.error(f"Error fetching S&P 500 tickers: {e}")
+        # Fallback to a small default list
+        return ["MMM", "AOS", "ABT", "TSLA", "ABBV"]
+
 def init_db():
     logger.info("Starting init_db function...")
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        # Drop existing tables to ensure clean initialization
-        cursor.execute("DROP TABLE IF EXISTS ohlcv")
-        cursor.execute("DROP TABLE IF EXISTS company_names")
-        cursor.execute("DROP TABLE IF EXISTS metadata")
-        # Create tables
+        # Create tables if they don't exist (no dropping)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS ohlcv (
                 ticker TEXT,
@@ -118,14 +132,12 @@ def get_all_tickers() -> List[str]:
         tickers = [row[0] for row in cursor.fetchall()]
         logger.info(f"Retrieved {len(tickers)} tickers from database: {tickers}")
         if not tickers:
-            logger.warning("No tickers found in database, using default tickers")
-            tickers = ["MMM", "AOS", "ABT", "TSLA"]
+            logger.warning("No tickers found in database, fetching S&P 500 tickers")
+            tickers = fetch_sp500_tickers()
         return tickers
     except Exception as e:
         logger.error(f"Error retrieving tickers: {e}")
-        return ["MMM", "AOS", "ABT", "TSLA"]
-    finally:
-        conn.close()
+        return fetch_sp500_tickers()
 
 def calculate_adx_dmi(df: pd.DataFrame, dmi_period: int = 14, adx_period: int = 14):
     logger.info("Calculating ADX and DMI...")
@@ -285,8 +297,10 @@ def update_data(batch_size: int = 50):
             for ticker in batch:
                 latest_date = get_latest_date(ticker)
                 if latest_date:
-                    start_date = (pd.to_datetime(latest_date) - timedelta(days=30)).strftime('%Y-%m-%d')
+                    # Start from day after latest date
+                    start_date = (pd.to_datetime(latest_date) + timedelta(days=1)).strftime('%Y-%m-%d')
                 else:
+                    # If no data, fetch 180 days to initialize
                     start_date = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
                 if start_date <= end_date:
                     df = fetch_yfinance_data(ticker, start_date, end_date)
