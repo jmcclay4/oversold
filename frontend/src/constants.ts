@@ -1,0 +1,6 @@
+export const DMI_PERIOD = 9;
+export const ADX_PERIOD = 14;
+export const ADX_TREND_STRENGTH_THRESHOLD = 20;
+export const DMI_CROSSOVER_PROXIMITY_PERCENTAGE = 0.10;
+export const MIN_DATA_POINTS_FOR_INDICATORS = ADX_PERIOD + DMI_PERIOD;
+export const API_CALL_DELAY_MS = 500;

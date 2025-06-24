@@ -1,0 +1,148 @@
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import sqlite3
+import logging
+import os
+from typing import List
+from pydantic import BaseModel
+from contextlib import asynccontextmanager
+import uvicorn
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+DB_PATH = os.path.join(os.path.dirname(__file__), "stocks.db")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Starting up FastAPI application")
+    if not os.path.exists(DB_PATH):
+        logger.error(f"Database file {DB_PATH} not found")
+        raise RuntimeError(f"Database file {DB_PATH} not found")
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ohlcv'")
+        if not cursor.fetchone():
+            logger.error("Table 'ohlcv' does not exist in database")
+            raise RuntimeError("Table 'ohlcv' does not exist in database")
+        logger.info("Database connection verified")
+    except Exception as e:
+        logger.error(f"Error during startup: {e}")
+        raise
+    finally:
+        conn.close()
+    yield
+    logger.info("Shutting down FastAPI application")
+
+app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "https://your-frontend.onrender.com"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class OHLCV(BaseModel):
+    date: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
+    company_name: str | None
+    adx: float | None
+    pdi: float | None
+    mdi: float | None
+    k: float | None
+    d: float | None
+
+class StockDataResponse(BaseModel):
+    ohlcv: List[OHLCV]
+
+class MetadataResponse(BaseModel):
+    last_ohlcv_update: str | None
+
+@app.get("/stocks/tickers", response_model=List[str])
+async def get_all_tickers():
+    logger.info("Received request for all tickers")
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT ticker FROM ohlcv ORDER BY ticker")
+        tickers = [row[0] for row in cursor.fetchall()]
+        logger.info(f"Returning {len(tickers)} tickers")
+        return tickers
+    except Exception as e:
+        logger.error(f"Error fetching tickers: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+@app.get("/stocks/{ticker}", response_model=StockDataResponse)
+async def get_stock_data(ticker: str):
+    logger.info(f"Received request for ticker: {ticker}")
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT date, open, high, low, close, volume, company_name, adx, pdi, mdi, k, d
+            FROM ohlcv
+            WHERE ticker = ?
+            ORDER BY date
+        """, (ticker.upper(),))
+        rows = cursor.fetchall()
+        if not rows:
+            raise HTTPException(status_code=404, detail=f"No data found for ticker {ticker}")
+        ohlcv_data = [
+            OHLCV(
+                date=row[0],
+                open=row[1],
+                high=row[2],
+                low=row[3],
+                close=row[4],
+                volume=row[5],
+                company_name=row[6],
+                adx=row[7],
+                pdi=row[8],
+                mdi=row[9],
+                k=row[10],
+                d=row[11]
+            )
+            for row in rows
+        ]
+        logger.info(f"Returning {len(ohlcv_data)} data points for {ticker}")
+        return StockDataResponse(ohlcv=ohlcv_data)
+    except Exception as e:
+        logger.error(f"Error fetching data for {ticker}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+@app.get("/metadata", response_model=MetadataResponse)
+async def get_metadata():
+    logger.info("Received request for metadata")
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT last_update FROM metadata WHERE key = 'last_ohlcv_update'")
+        result = cursor.fetchone()
+        last_update = result[0] if result else None
+        logger.info(f"Returning last OHLCV update: {last_update}")
+        if last_update is None:
+            logger.warning("No last_ohlcv_update found in metadata table")
+        return MetadataResponse(last_ohlcv_update=last_update)
+    except sqlite3.Error as e:
+        logger.error(f"Database error fetching metadata: {e}")
+        return MetadataResponse(last_ohlcv_update=None)
+    except Exception as e:
+        logger.error(f"Unexpected error fetching metadata: {e}")
+        return MetadataResponse(last_ohlcv_update=None)
+    finally:
+        conn.close()
+
+if __name__ == "__main__":
+    logger.info("Starting Uvicorn server...")
+    uvicorn.run(app, host="0.0.0.0", port=8000)

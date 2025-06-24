@@ -1,0 +1,5 @@
+{
+  "name": "Stock ADX & DMI Analyzer",
+  "description": "A technical analysis tool that identifies stocks with a positive ADX (trend strength) and a 9-period DMI nearing or experiencing a bullish crossover (+DI approaching or crossing above -DI). It uses Gemini API for AI-powered insights.",
+  "requestFramePermissions": []
+}
