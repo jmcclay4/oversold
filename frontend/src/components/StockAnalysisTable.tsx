@@ -98,20 +98,20 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
                 }`}>
                   {formatPercent(result.percentChange)}
                 </td>
-                <td className={`px-3 py-3 whitespace-nowrap text-sm ${result.latestIndicators && result.latestIndicators.adx > ADX_TREND_STRENGTH_THRESHOLD ? 'text-green-400 font-medium' : 'text-slate-300'}`}>
-                  {result.latestIndicators?.adx?.toFixed(2) ?? 'N/A'}
+                <td className={`px-3 py-3 whitespace-nowrap text-sm ${result.latestIndicators && result.latestIndicators.adx != null && result.latestIndicators.adx > ADX_TREND_STRENGTH_THRESHOLD ? 'text-green-400 font-medium' : 'text-slate-300'}`}>
+                  {result.latestIndicators?.adx != null ? result.latestIndicators.adx.toFixed(2) : 'N/A'}
                 </td>
                 <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-300">
-                  {result.latestIndicators?.pdi?.toFixed(2) ?? 'N/A'}
+                  {result.latestIndicators?.pdi != null ? result.latestIndicators.pdi.toFixed(2) : 'N/A'}
                 </td>
                 <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-300">
-                  {result.latestIndicators?.mdi?.toFixed(2) ?? 'N/A'}
+                  {result.latestIndicators?.mdi != null ? result.latestIndicators.mdi.toFixed(2) : 'N/A'}
                 </td>
                 <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-300">
-                  {result.latestIndicators?.k?.toFixed(2) ?? 'N/A'}
+                  {result.latestIndicators?.k != null ? result.latestIndicators.k.toFixed(2) : 'N/A'}
                 </td>
                 <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-300">
-                  {result.latestIndicators?.d?.toFixed(2) ?? 'N/A'}
+                  {result.latestIndicators?.d != null ? result.latestIndicators.d.toFixed(2) : 'N/A'}
                 </td>
                 <td className="px-3 py-3 whitespace-nowrap">
                   <OhlcvDisplay ohlcv={result.latestOhlcvDataPoint} />

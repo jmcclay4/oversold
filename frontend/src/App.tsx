@@ -57,11 +57,15 @@ const App: React.FC = () => {
     setSelectedTickerForChart(ticker);
     try {
       const stockData = await analyzeStockTicker(ticker);
-      setAllAnalysisResults(prev => {
-        const updated = prev.filter(r => r.ticker !== ticker);
-        updated.push(stockData);
-        return updated;
-      });
+      if (!stockData.error) {
+        setAllAnalysisResults(prev => {
+          // Only update the selected ticker
+          const updated = prev.map(r => r.ticker === ticker ? stockData : r);
+          return updated;
+        });
+      } else {
+        console.error(`Error fetching chart data for ${ticker}:`, stockData.error);
+      }
     } catch (err) {
       console.error(`Error fetching chart data for ${ticker}:`, err);
     }
@@ -98,15 +102,15 @@ const App: React.FC = () => {
     setGlobalError(null);
     try {
       const tickers = await fetchAllTickers();
+      if (tickers.length === 0) {
+        throw new Error('No tickers available');
+      }
       console.log('Fetched tickers:', tickers.length);
       const allTickers = [...tickers, ...customTickers];
-      console.log('Fetching data for tickers:', allTickers.length);
       const results = await analyzeTrackedStocks(allTickers);
       console.log('Loaded stocks:', results.length, results.slice(0, 3));
       setAllAnalysisResults(results);
-
       const metadata = await fetchMetadata();
-      console.log('Fetched metadata:', metadata);
       setLastOhlcvUpdate(metadata.last_ohlcv_update || 'Unknown');
     } catch (error) {
       const errMsg = `Error analyzing stocks: ${(error as Error).message}`;

@@ -1,7 +1,8 @@
-import { OHLCV, StockAnalysisResult, IndicatorValues } from '../types';
+import { OHLCV, StockAnalysisResult, IndicatorValues, BatchStockDataResponse } from '../types';
 import { ADX_TREND_STRENGTH_THRESHOLD, DMI_CROSSOVER_PROXIMITY_PERCENTAGE } from '../constants';
 
-const API_BASE_URL = 'https://oversold-backend.onrender.com'; // Update to https://your-app.onrender.com for deployment
+const API_BASE_URL = 'https://oversold-backend.onrender.com';
+const BATCH_SIZE = 50;
 
 const fetchStockData = async (ticker: string): Promise<OHLCV[]> => {
   try {
@@ -13,7 +14,7 @@ const fetchStockData = async (ticker: string): Promise<OHLCV[]> => {
     if (data.error) {
       throw new Error(data.error);
     }
-    return data.ohlcv.map((d: any) => ({
+    const ohlcv = data.ohlcv.map((d: any) => ({
       date: d.date,
       open: d.open,
       high: d.high,
@@ -27,8 +28,29 @@ const fetchStockData = async (ticker: string): Promise<OHLCV[]> => {
       k: d.k ?? null,
       d: d.d ?? null,
     }));
+    console.log(`Fetched data for ${ticker}, latest:`, ohlcv[ohlcv.length - 1]);
+    return ohlcv;
   } catch (err) {
     console.error(`Fetch error for ${ticker}:`, err);
+    throw err;
+  }
+};
+
+const fetchBatchStockData = async (tickers: string[]): Promise<BatchStockDataResponse[]> => {
+  console.log(`Fetching batch data for ${tickers.length} tickers`);
+  try {
+    const response = await fetch(`${API_BASE_URL}/stocks/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(tickers),
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error ${response.status}`);
+    }
+    const data = await response.json();
+    return data;
+  } catch (err) {
+    console.error('Batch fetch error:', err);
     throw err;
   }
 };
@@ -83,7 +105,6 @@ const getCompanyName = (ticker: string, ohlcvData: OHLCV[]): string => {
 export const analyzeStockTicker = async (ticker: string): Promise<StockAnalysisResult> => {
   try {
     const ohlcvData = await fetchStockData(ticker);
-
     if (ohlcvData.length === 0) {
       return {
         ticker,
@@ -95,7 +116,6 @@ export const analyzeStockTicker = async (ticker: string): Promise<StockAnalysisR
         ohlcv: [],
       };
     }
-
     if (ohlcvData.length < 2) {
       return {
         ticker,
@@ -107,23 +127,19 @@ export const analyzeStockTicker = async (ticker: string): Promise<StockAnalysisR
         ohlcv: ohlcvData,
       };
     }
-
     const latestOhlcvDataPoint = ohlcvData[ohlcvData.length - 1];
     const previousOhlcvDataPoint = ohlcvData[ohlcvData.length - 2];
-
     const latestPrice = latestOhlcvDataPoint.close;
     const percentChange = previousOhlcvDataPoint.close
       ? ((latestPrice - previousOhlcvDataPoint.close) / previousOhlcvDataPoint.close) * 100
       : undefined;
-
     const latestIndicators: IndicatorValues = {
-      adx: latestOhlcvDataPoint.adx ?? 0,
-      pdi: latestOhlcvDataPoint.pdi ?? 0,
-      mdi: latestOhlcvDataPoint.mdi ?? 0,
-      k: latestOhlcvDataPoint.k ?? 0,
-      d: latestOhlcvDataPoint.d ?? 0,
+      adx: latestOhlcvDataPoint.adx ?? null,
+      pdi: latestOhlcvDataPoint.pdi ?? null,
+      mdi: latestOhlcvDataPoint.mdi ?? null,
+      k: latestOhlcvDataPoint.k ?? null,
+      d: latestOhlcvDataPoint.d ?? null,
     };
-
     let previousIndicators: IndicatorValues | undefined = undefined;
     if (
       previousOhlcvDataPoint.adx != null &&
@@ -140,37 +156,31 @@ export const analyzeStockTicker = async (ticker: string): Promise<StockAnalysisR
         d: previousOhlcvDataPoint.d,
       };
     }
-
     const statusTags: string[] = [];
     let meetsCriteria = false;
     let message = "";
-
     const pdiCrossedAboveMdi =
-      latestIndicators.pdi > latestIndicators.mdi &&
+      latestIndicators.pdi != null &&
+      latestIndicators.mdi != null &&
       previousIndicators &&
+      previousIndicators.pdi != null &&
+      previousIndicators.mdi != null &&
+      latestIndicators.pdi > latestIndicators.mdi &&
       previousIndicators.pdi <= previousIndicators.mdi;
-    const pdiCurrentlyAboveMdi = latestIndicators.pdi > latestIndicators.mdi;
+    const pdiCurrentlyAboveMdi =
+      latestIndicators.pdi != null && latestIndicators.mdi != null && latestIndicators.pdi > latestIndicators.mdi;
     const pdiNearingMdi =
+      latestIndicators.pdi != null &&
+      latestIndicators.mdi != null &&
       latestIndicators.mdi > 0 &&
       Math.abs(latestIndicators.pdi - latestIndicators.mdi) / latestIndicators.mdi <= DMI_CROSSOVER_PROXIMITY_PERCENTAGE;
-    const isStrongTrend = latestIndicators.adx >= ADX_TREND_STRENGTH_THRESHOLD;
-
-    const isStochasticClose = (k: number, d: number) => Math.abs(k - d) <= 8;
-    const isStochasticOversold = (k: number, d: number) => k <= 20 || d <= 20;
-    const isStochasticSignal = (k: number, d: number) => isStochasticClose(k, d) && isStochasticOversold(k, d);
-
+    const isStrongTrend = latestIndicators.adx != null && latestIndicators.adx >= ADX_TREND_STRENGTH_THRESHOLD;
+    const isStochasticClose = (k: number | null, d: number | null) => k != null && d != null && Math.abs(k - d) <= 8;
+    const isStochasticOversold = (k: number | null, d: number | null) => (k != null && k <= 20) || (d != null && d <= 20);
+    const isStochasticSignal = (k: number | null, d: number | null) => isStochasticClose(k, d) && isStochasticOversold(k, d);
     const hasStochasticSignal =
       isStochasticSignal(latestIndicators.k, latestIndicators.d) ||
       (previousIndicators && isStochasticSignal(previousIndicators.k, previousIndicators.d));
-
-    console.log(`STO alert for ${ticker}:`, {
-      currentK: latestIndicators.k.toFixed(2),
-      currentD: latestIndicators.d.toFixed(2),
-      prevK: previousIndicators?.k.toFixed(2),
-      prevD: previousIndicators?.d.toFixed(2),
-      hasStochasticSignal,
-    });
-
     if (pdiCrossedAboveMdi || pdiCurrentlyAboveMdi || pdiNearingMdi) {
       statusTags.push('DMI');
       meetsCriteria = true;
@@ -182,13 +192,11 @@ export const analyzeStockTicker = async (ticker: string): Promise<StockAnalysisR
       statusTags.push('STO');
       meetsCriteria = true;
     }
-
     if (statusTags.length === 0) {
-      message = `No alerts. ADX: ${latestIndicators.adx.toFixed(2)}, +DI: ${latestIndicators.pdi.toFixed(2)}, -DI: ${latestIndicators.mdi.toFixed(2)}, %K: ${latestIndicators.k.toFixed(2)}, %D: ${latestIndicators.d.toFixed(2)}.`;
+      message = `No alerts. ADX: ${latestIndicators.adx?.toFixed(2) ?? 'N/A'}, +DI: ${latestIndicators.pdi?.toFixed(2) ?? 'N/A'}, -DI: ${latestIndicators.mdi?.toFixed(2) ?? 'N/A'}, %K: ${latestIndicators.k?.toFixed(2) ?? 'N/A'}, %D: ${latestIndicators.d?.toFixed(2) ?? 'N/A'}.`;
     } else {
       message = `Alerts: ${statusTags.join(', ')}.`;
     }
-
     return {
       ticker,
       companyName: getCompanyName(ticker, ohlcvData),
@@ -224,9 +232,101 @@ export const analyzeStockTicker = async (ticker: string): Promise<StockAnalysisR
 
 export const analyzeTrackedStocks = async (tickers: string[]): Promise<StockAnalysisResult[]> => {
   const results: StockAnalysisResult[] = [];
-  for (const ticker of tickers) {
-    const stockData = await analyzeStockTicker(ticker);
-    results.push(stockData);
+  const batches = [];
+  for (let i = 0; i < tickers.length; i += BATCH_SIZE) {
+    batches.push(tickers.slice(i, i + BATCH_SIZE));
+  }
+  for (const batch of batches) {
+    try {
+      const batchData = await fetchBatchStockData(batch);
+      for (const stock of batchData) {
+        const ticker = stock.ticker;
+        const latestOhlcv = stock.latest_ohlcv;
+        if (!latestOhlcv) {
+          results.push({
+            ticker,
+            statusTags: [],
+            meetsCriteria: false,
+            message: `No data found for ${ticker}`,
+            error: `No data for ${ticker}`,
+            companyName: stock.company_name || `${ticker} Inc.`,
+            ohlcv: [],
+          });
+          continue;
+        }
+        const latestIndicators: IndicatorValues = {
+          adx: latestOhlcv.adx ?? null,
+          pdi: latestOhlcv.pdi ?? null,
+          mdi: latestOhlcv.mdi ?? null,
+          k: latestOhlcv.k ?? null,
+          d: latestOhlcv.d ?? null,
+        };
+        const statusTags: string[] = [];
+        let meetsCriteria = false;
+        let message = "";
+        const pdiCurrentlyAboveMdi =
+          latestIndicators.pdi != null && latestIndicators.mdi != null && latestIndicators.pdi > latestIndicators.mdi;
+        const pdiNearingMdi =
+          latestIndicators.pdi != null &&
+          latestIndicators.mdi != null &&
+          latestIndicators.mdi > 0 &&
+          Math.abs(latestIndicators.pdi - latestIndicators.mdi) / latestIndicators.mdi <= DMI_CROSSOVER_PROXIMITY_PERCENTAGE;
+        const isStrongTrend = latestIndicators.adx != null && latestIndicators.adx >= ADX_TREND_STRENGTH_THRESHOLD;
+        const isStochasticClose = (k: number | null, d: number | null) => k != null && d != null && Math.abs(k - d) <= 8;
+        const isStochasticOversold = (k: number | null, d: number | null) => (k != null && k <= 20) || (d != null && d <= 20);
+        const isStochasticSignal = (k: number | null, d: number | null) => isStochasticClose(k, d) && isStochasticOversold(k, d);
+        const hasStochasticSignal = isStochasticSignal(latestIndicators.k, latestIndicators.d);
+        if (pdiCurrentlyAboveMdi || pdiNearingMdi) {
+          statusTags.push('DMI');
+          meetsCriteria = true;
+        }
+        if (isStrongTrend) {
+          statusTags.push('ADX');
+        }
+        if (hasStochasticSignal) {
+          statusTags.push('STO');
+          meetsCriteria = true;
+        }
+        if (statusTags.length === 0) {
+          message = `No alerts. ADX: ${latestIndicators.adx?.toFixed(2) ?? 'N/A'}, +DI: ${latestIndicators.pdi?.toFixed(2) ?? 'N/A'}, -DI: ${latestIndicators.mdi?.toFixed(2) ?? 'N/A'}, %K: ${latestIndicators.k?.toFixed(2) ?? 'N/A'}, %D: ${latestIndicators.d?.toFixed(2) ?? 'N/A'}.`;
+        } else {
+          message = `Alerts: ${statusTags.join(', ')}.`;
+        }
+        results.push({
+          ticker,
+          companyName: stock.company_name || `${ticker} Inc.`,
+          latestPrice: latestOhlcv.close,
+          percentChange: undefined, // Calculate on client-side if needed
+          latestOhlcvDataPoint: latestOhlcv,
+          latestIndicators,
+          previousIndicators: undefined,
+          historicalDates: [], // Empty for table data
+          historicalClosePrices: [],
+          historicalAdx: [],
+          historicalPdi: [],
+          historicalMdi: [],
+          historicalK: [],
+          historicalD: [],
+          ohlcv: [latestOhlcv],
+          statusTags,
+          meetsCriteria,
+          message,
+        });
+      }
+    } catch (err) {
+      console.error(`Batch error: ${err}`);
+      batch.forEach(ticker => {
+        results.push({
+          ticker,
+          statusTags: [],
+          meetsCriteria: false,
+          message: `Failed to fetch data for ${ticker}`,
+          error: (err as Error).message,
+          companyName: `${ticker} Inc.`,
+          ohlcv: [],
+        });
+      });
+    }
   }
   return results;
 };

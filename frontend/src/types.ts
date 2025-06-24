@@ -14,18 +14,18 @@ export interface OHLCV {
 }
 
 export interface IndicatorValues {
-  adx: number;
-  pdi: number;
-  mdi: number;
-  k: number;
-  d: number;
+  adx: number | null;
+  pdi: number | null;
+  mdi: number | null;
+  k: number | null;
+  d: number | null;
 }
 
 export interface StockAnalysisResult {
   ticker: string;
   companyName: string;
   latestPrice?: number;
-  percentChange?: number; // Retained for ∆ column
+  percentChange?: number;
   latestOhlcvDataPoint?: OHLCV;
   latestIndicators?: IndicatorValues;
   previousIndicators?: IndicatorValues;
@@ -41,6 +41,12 @@ export interface StockAnalysisResult {
   meetsCriteria: boolean;
   message: string;
   error?: string;
+}
+
+export interface BatchStockDataResponse {
+  ticker: string;
+  company_name: string | null;
+  latest_ohlcv: OHLCV | null;
 }
 
 export interface FilterCriteria {
