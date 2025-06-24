@@ -20,7 +20,7 @@ async def lifespan(app: FastAPI):
     try:
         if not os.path.exists(DB_PATH):
             logger.warning(f"Database file {DB_PATH} not found, initializing...")
-            initialize_database()
+            init_db()
             logger.info(f"Database initialized at {DB_PATH}")
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI):
         if not cursor.fetchone():
             logger.warning("Table 'ohlcv' does not exist, initializing database...")
             conn.close()
-            initialize_database()
+            init_db()
             logger.info("Database tables created")
         else:
             logger.info("Database connection verified")
