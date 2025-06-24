@@ -1,7 +1,7 @@
 import { OHLCV, StockAnalysisResult, IndicatorValues } from '../types';
 import { ADX_TREND_STRENGTH_THRESHOLD, DMI_CROSSOVER_PROXIMITY_PERCENTAGE } from '../constants';
 
-const API_BASE_URL = 'http://localhost:8000'; // Update to https://your-app.onrender.com for deployment
+const API_BASE_URL = 'https://oversold-backend.onrender.com'; // Update to https://your-app.onrender.com for deployment
 
 const fetchStockData = async (ticker: string): Promise<OHLCV[]> => {
   try {
