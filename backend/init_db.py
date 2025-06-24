@@ -23,12 +23,11 @@ def fetch_sp500_tickers() -> List[str]:
         soup = BeautifulSoup(response.text, 'html.parser')
         table = soup.find('table', {'id': 'constituents'})
         df = pd.read_html(str(table))[0]
-        tickers = df['Symbol'].str.replace('.', '-', regex=False).tolist()  # Replace dots with hyphens for yfinance
+        tickers = df['Symbol'].str.replace('.', '-', regex=False).tolist()
         logger.info(f"Retrieved {len(tickers)} S&P 500 tickers")
         return tickers
     except Exception as e:
         logger.error(f"Error fetching S&P 500 tickers: {e}")
-        # Fallback to a small default list
         return ["MMM", "AOS", "ABT", "TSLA", "ABBV"]
 
 def init_db():
@@ -36,7 +35,6 @@ def init_db():
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        # Create tables if they don't exist (no dropping)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS ohlcv (
                 ticker TEXT,
@@ -164,7 +162,7 @@ def calculate_adx_dmi(df: pd.DataFrame, dmi_period: int = 14, adx_period: int = 
     di_minus = 100 * pd.Series(dm_minus).rolling(window=dmi_period, min_periods=dmi_period).mean() / (atr + 1e-10)
     dx = 100 * np.abs(di_plus - di_minus) / (di_plus + di_minus + 1e-10)
     adx = pd.Series(dx).rolling(window=adx_period, min_periods=adx_period).mean().values
-    logger.info(f"ADX for last row: {adx[-1] if n > 0 else None}")
+    logger.info(f"ADX for last row: {adx[-1] if n > 0 else None}, PDI: {di_plus[-1] if n > 0 else None}, MDI: {di_minus[-1] if n > 0 else None}")
     return adx, di_plus, di_minus
 
 def calculate_stochastic(df: pd.DataFrame, k_period: int = 14, d_period: int = 3):
@@ -182,28 +180,30 @@ def calculate_stochastic(df: pd.DataFrame, k_period: int = 14, d_period: int = 3
     return k.values, d.values
 
 def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataFrame:
-    retries = 2
-    delay = 1
+    retries = 3
+    delay = 2
     cached_name = get_cached_company_name(ticker)
     company_name = cached_name or f"{ticker} Inc."
     for attempt in range(1, retries + 1):
         try:
             logger.info(f"Fetching yfinance data for {ticker}, attempt {attempt}, start: {start_date}, end: {end_date}")
             stock = yf.Ticker(ticker)
-            # Fetch extra days to ensure enough data for indicators
-            extended_start_date = (pd.to_datetime(start_date) - timedelta(days=30)).strftime('%Y-%m-%d')
-            df = stock.history(start=extended_start_date, end=end_date)
+            df = stock.history(start=start_date, end=end_date, auto_adjust=True)
             if df.empty:
                 raise ValueError(f"No data found for {ticker}")
             df = df.reset_index()
             df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
-            # Ensure sequential dates and remove duplicates
             df = df.sort_values('Date').drop_duplicates('Date', keep='last')
             logger.info(f"Fetched {len(df)} rows for {ticker}, dates: {df['Date'].iloc[0]} to {df['Date'].iloc[-1]}")
             if not cached_name:
                 company_name = stock.info.get('longName', f"{ticker} Inc.")
                 store_company_name(ticker, company_name)
             df['company_name'] = company_name
+            # Validate data before calculating indicators
+            required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+            if not all(col in df.columns for col in required_columns) or df[required_columns].isnull().any().any():
+                logger.warning(f"Invalid or missing OHLCV data for {ticker}")
+                return pd.DataFrame()
             # Calculate indicators
             adx, pdi, mdi = calculate_adx_dmi(df)
             k, d = calculate_stochastic(df)
@@ -212,6 +212,9 @@ def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataF
             df['mdi'] = mdi
             df['k'] = k
             df['d'] = d
+            # Check for NaN in indicators
+            if df[['adx', 'pdi', 'mdi', 'k', 'd']].iloc[-1].isnull().any():
+                logger.warning(f"NaN detected in indicators for {ticker} on {df['Date'].iloc[-1]}")
             logger.info(f"Last row for {ticker}: Date={df['Date'].iloc[-1]}, ADX={df['adx'].iloc[-1]}, %K={df['k'].iloc[-1]}")
             return df
         except Exception as e:
@@ -284,30 +287,26 @@ def delete_old_data(max_age_days: int = 180):
 def update_data(batch_size: int = 50):
     logger.info("Updating stock data...")
     try:
-        # Fetch tickers from database
         tickers = get_all_tickers()
         logger.info(f"Processing {len(tickers)} tickers from database")
-        
-        # Use yesterday as end_date to avoid incomplete data
-        end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-        
+        end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')  # Yesterday
         for i in range(0, len(tickers), batch_size):
             batch = tickers[i:i + batch_size]
             logger.info(f"Processing batch {i//batch_size + 1} with tickers: {batch}")
             for ticker in batch:
                 latest_date = get_latest_date(ticker)
                 if latest_date:
-                    # Start from day after latest date
                     start_date = (pd.to_datetime(latest_date) + timedelta(days=1)).strftime('%Y-%m-%d')
+                    if start_date > end_date:
+                        logger.info(f"No new data needed for {ticker}, latest date: {latest_date}")
+                        continue
                 else:
-                    # If no data, fetch 180 days to initialize
                     start_date = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
-                if start_date <= end_date:
-                    df = fetch_yfinance_data(ticker, start_date, end_date)
-                    logger.info(f"Fetched {len(df)} rows for {ticker}, last date: {df['Date'].iloc[-1] if not df.empty else 'empty'}")
-                    store_stock_data(ticker, df)
-                    time.sleep(1)
-        
+                logger.info(f"Fetching data for {ticker} from {start_date} to {end_date}")
+                df = fetch_yfinance_data(ticker, start_date, end_date)
+                logger.info(f"Fetched {len(df)} rows for {ticker}, last date: {df['Date'].iloc[-1] if not df.empty else 'empty'}")
+                store_stock_data(ticker, df)
+                time.sleep(1)
         delete_old_data(max_age_days=180)
         update_metadata()
         logger.info("Data update completed")
