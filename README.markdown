@@ -1,187 +1,228 @@
-# OVERSOLD - Stock Analyzer Dashboard
+# Oversold
 
-**OVERSOLD** is a web-based stock analysis dashboard that provides technical analysis for stocks using indicators such as ADX, DMI, and Stochastic oscillators. The dashboard allows users to view stock data, track favorite stocks, and receive alerts based on predefined technical conditions. It is designed for educational purposes and is not intended for financial advice.
+Oversold is a web application for analyzing S&P 500 stocks based on technical indicators such as Average Directional Index (ADX), Directional Movement Index (DMI), and Stochastic Oscillator. It provides a user-friendly interface to view stock data, including price trends and technical signals, helping investors identify potential oversold or overbought conditions. The project is hosted at [https://oversold.jmcclay.com](https://oversold.jmcclay.com) and is open-source, available at [https://github.com/jmcclay4/oversold](https://github.com/jmcclay4/oversold).
 
 ## Table of Contents
-1. [Project Overview](#project-overview)
-2. [File Structure](#file-structure)
-3. [Technologies Used](#technologies-used)
-4. [Frontend and Backend Interaction](#frontend-and-backend-interaction)
-5. [Setup and Installation](#setup-and-installation)
-6. [Running the Project](#running-the-project)
-7. [Known Issues and Improvements](#known-issues-and-improvements)
 
----
+- [Project Overview](#project-overview)
+  - [Features](#features)
+- [How It Works](#how-it-works)
+- [File Structure](#file-structure)
+  - [Backend](#backend)
+  - [Frontend](#frontend)
+- [Technologies and Libraries](#technologies-and-libraries)
+  - [Backend](#backend-1)
+  - [Frontend](#frontend-1)
+  - [Deployment](#deployment)
+- [Setup and Development](#setup-and-development)
+  - [Prerequisites](#prerequisites)
+  - [Local Development](#local-development)
+  - [Deployment](#deployment-1)
+- [Contributing](#contributing)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
 
 ## Project Overview
 
-**OVERSOLD** is a stock analysis tool that:
-- Displays technical indicators (ADX, DMI, Stochastic) for S&P 500 stocks and user-added tickers.
-- Provides visual alerts (status tags) for specific conditions:
-  - **DMI**: When DMI+ crosses above DMI- or is nearing a crossover.
-  - **ADX**: When ADX ≥ 25, indicating a strong trend.
-  - **STO**: When Stochastic %K or %D ≤ 20 or %K is nearing %D.
-- Allows users to favorite stocks, add custom tickers, and view interactive charts.
-- Uses a dark-themed, modern UI with a custom logo and responsive design.
+The Oversold application fetches historical stock data for S&P 500 companies, calculates technical indicators, and stores the results in a SQLite database. The backend serves this data via a REST API, while the frontend displays it in a responsive table and interactive charts. The application is designed to be efficient, scalable, and cost-effective, leveraging free tiers of Fly.io for backend deployment and Vercel for frontend hosting.
 
-### Target Audience
-- Beginner to intermediate stock traders or enthusiasts interested in technical analysis.
-- Developers or students learning about full-stack development with React and FastAPI.
+### Features
+- **Stock Analysis**: Displays daily OHLCV (Open, High, Low, Close, Volume) data for S&P 500 stocks with calculated indicators (ADX, +DI, -DI, %K, %D).
+- **Batch Processing**: Optimizes data retrieval by fetching multiple tickers in a single API call.
+- **Persistent Database**: Stores data in a SQLite database on a 1 GB volume for persistence.
+- **Responsive UI**: A clean, modern interface with a stock table and interactive charts, styled with Tailwind CSS.
+- **Real-Time Updates**: Automatically rebuilds the database daily to ensure data is current (up to June 24, 2025, due to API constraints).
+- **CORS Support**: Enables seamless communication between the frontend and backend.
 
----
+## How It Works
+
+1. **Backend (Fly.io)**:
+   - Fetches historical stock data using the `yfinance` library for S&P 500 tickers.
+   - Calculates technical indicators (ADX, DMI, Stochastic) and stores them in `/data/stocks.db`.
+   - Serves data via FastAPI endpoints (`/stocks/tickers`, `/stocks/{ticker}`, `/stocks/batch`, `/metadata`).
+   - Rebuilds the database daily or on-demand via `/rebuild-db` to keep data current.
+   - Hosted on Fly.io with a 1 GB persistent volume for `stocks.db`.
+
+2. **Frontend (Vercel)**:
+   - Built with React and TypeScript, displaying a table of stocks with indicators in `StockAnalysisTable.tsx`.
+   - Fetches data from the backend using batch requests for efficiency.
+   - Uses Chart.js for interactive stock price and indicator charts.
+   - Styled with Tailwind CSS and Google Fonts (Special Gothic Expanded One for the logo).
+   - Deployed on Vercel for fast, scalable hosting.
+
+3. **Data Flow**:
+   - On startup, the backend checks `stocks.db` and rebuilds it if outdated or missing.
+   - The frontend fetches a list of tickers (`/stocks/tickers`), then retrieves batch data (`/stocks/batch`) for the table.
+   - Users can select a stock to view detailed charts, fetching data via `/stocks/{ticker}`.
 
 ## File Structure
 
-The project is divided into two main directories: `frontend` and `backend`. Below is a detailed breakdown of each directory and the purpose of each file.
+### Backend
+```
+backend/
+├── Dockerfile            # Defines the Docker image for Fly.io deployment
+├── fly.toml              # Fly.io configuration for deployment and volume
+├── main.py               # FastAPI app with API endpoints and CORS
+├── init_db.py            # Database initialization and data fetching logic
+├── sp500_tickers.py      # List of S&P 500 ticker symbols
+├── requirements.txt      # Python dependencies
+└── /data/stocks.db       # SQLite database (generated on Fly.io)
+```
 
-### Frontend (`/frontend`)
-
-- **`/src`**:
-  - **`App.tsx`**: The main React component that renders the entire application. It handles state management for stock data, favorites, filters, and the selected stock for charting.
-  - **`main.tsx`**: Entry point for the React application. Renders `App.tsx` into the DOM.
-  - **`/components`**:
-    - **`StockAnalysisTable.tsx`**: Renders the table of stock data with columns for favorites, ticker, price, indicators, and status tags. Handles row clicks to select stocks for charting.
-    - **`StockChart.tsx`**: Renders interactive charts for the selected stock using Chart.js. Displays historical close prices and technical indicators.
-    - **`LoadingSpinner.tsx`**: A simple loading spinner component shown while data is being fetched.
-    - **`ErrorMessage.tsx`**: Displays error messages when data fetching or analysis fails.
-  - **`/services`**:
-    - **`stockDataService.ts`**: Contains functions to fetch stock data from the backend, analyze stocks, and calculate technical indicators (ADX, DMI, Stochastic).
-  - **`/types`**:
-    - **`types.ts`**: Defines TypeScript interfaces for stock data, indicators, and filter criteria.
-  - **`/constants`**:
-    - **`constants.ts`**: Holds constants like `TOP_N_TICKERS_LIST`, thresholds for indicators, and API delay settings.
-  - **`/utils`**:
-    - **`indicatorCalculations.ts`**: Utility functions for calculating ADX, DMI, and Stochastic indicators.
-
-- **`/public`**:
-  - **`index.html`**: The main HTML file that loads the React application. Includes links to Google Fonts for custom typography.
-
-- **`/package.json`**: Manages frontend dependencies and scripts for building and running the React application.
-
-### Backend (`/backend`)
-
-- **`main.py`**: The entry point for the FastAPI backend. Defines API endpoints for fetching stock data, refreshing analysis, and checking cache status. Handles database initialization and caching.
-- **`backfill_company_names.py`**: A utility script to backfill company names for stocks using `yfinance`.
-- **`requirements.txt`**: Lists Python dependencies for the backend, including `fastapi`, `uvicorn`, `yfinance`, `pandas`, and `tqdm`.
-- **`stocks.db`**: SQLite database file storing OHLCV data and cached analysis results.
-
----
-
-## Technologies Used
+- **Dockerfile**: Configures a Python 3.9-slim environment, installs dependencies, and runs `uvicorn main:app`.
+- **fly.toml**: Specifies Fly.io settings, including the app name (`oversold-backend`), port (8000), and 1 GB volume for `/data`.
+- **main.py**: Defines FastAPI endpoints (`/stocks/tickers`, `/stocks/{ticker}`, `/stocks/batch`, `/metadata`, `/update-db`, `/rebuild-db`), handles CORS, and manages database lifecycle.
+- **init_db.py**: Initializes `stocks.db`, fetches data via `yfinance`, calculates indicators, and updates the database.
+- **sp500_tickers.py**: Contains a list of S&P 500 ticker symbols as strings.
+- **requirements.txt**: Lists Python dependencies (e.g., `fastapi`, `uvicorn`, `yfinance`, `pandas`, `numpy`, `sqlite3`).
+- **/data/stocks.db**: SQLite database storing OHLCV data, company names, and metadata (persistent on Fly.io).
 
 ### Frontend
-- **React**: JavaScript library for building user interfaces.
-- **TypeScript**: Typed superset of JavaScript for better code quality and maintainability.
-- **Chart.js**: For rendering interactive stock charts.
-- **Tailwind CSS**: Utility-first CSS framework for styling.
-- **Vite**: Build tool for faster development and production builds.
+```
+frontend/
+├── public/
+│   └── index.html        # HTML entry point with Google Fonts
+├── src/
+│   ├── App.tsx           # Main React component with header and layout
+│   ├── StockAnalysisTable.tsx # Table component for stock data
+│   ├── stockDataService.ts # API client for fetching backend data
+│   ├── components/        # Reusable React components
+│   ├── styles/            # Tailwind CSS configuration
+│   └── assets/            # Static assets (e.g., favicon)
+├── package.json          # Node.js dependencies and scripts
+├── tsconfig.json         # TypeScript configuration
+├── vite.config.ts        # Vite build configuration
+└── tailwind.config.js    # Tailwind CSS configuration
+```
+
+- **index.html**: HTML template with Google Fonts (Special Gothic Expanded One) for the "OVERSOLD" logo.
+- **App.tsx**: Root component with the header (styled as a logo) and routes to `StockAnalysisTable`.
+- **StockAnalysisTable.tsx**: Displays a table of stocks with indicators, fetches batch data, and renders charts with Chart.js.
+- **stockDataService.ts**: Handles API requests to the backend (`https://oversold-backend.fly.dev`).
+- **package.json**: Lists frontend dependencies (e.g., `react`, `typescript`, `tailwindcss`, `chart.js`).
+- **tsconfig.json**: Configures TypeScript for React and strict type checking.
+- **vite.config.ts**: Vite configuration for fast development and production builds.
+- **tailwind.config.js**: Customizes Tailwind CSS with colors, fonts, and responsive design.
+
+## Technologies and Libraries
 
 ### Backend
-- **FastAPI**: Modern Python web framework for building APIs.
-- **SQLite**: Lightweight database for storing stock data and analysis cache.
-- **yfinance**: Python library to fetch stock data from Yahoo Finance.
-- **pandas**: Data manipulation library for handling stock data.
-- **uvicorn**: ASGI server for running the FastAPI application.
+- **Python 3.9**: Core programming language.
+- **FastAPI**: High-performance web framework for building APIs.
+- **Uvicorn**: ASGI server for running FastAPI.
+- **yfinance**: Fetches historical stock data from Yahoo Finance.
+- **pandas**: Data manipulation for calculating indicators.
+- **numpy**: Numerical computations for indicator calculations.
+- **sqlite3**: Manages the SQLite database (`stocks.db`).
+- **logging**: Logs application events for debugging.
 
----
+### Frontend
+- **React 18**: JavaScript library for building the UI.
+- **TypeScript**: Static typing for safer code.
+- **Tailwind CSS**: Utility-first CSS framework for styling.
+- **Chart.js**: Interactive charts for stock data visualization.
+- **Vite**: Fast build tool for development and production.
+- **Axios**: HTTP client for API requests (in `stockDataService.ts`).
+- **Google Fonts**: Special Gothic Expanded One for the logo.
 
-## Frontend and Backend Interaction
+### Deployment
+- **Fly.io**: Hosts the backend (`oversold-backend`) with a 1 GB persistent volume for `stocks.db`.
+- **Vercel**: Hosts the frontend (`oversold.jmcclay.com`) with automatic scaling and CDN.
+- **Docker**: Containerizes the backend for consistent deployment.
 
-The frontend communicates with the backend via RESTful API endpoints provided by FastAPI. Below are the key endpoints and their purposes:
-
-- **`GET /stocks/{ticker}`**: Fetches cached or live stock data for a given ticker. Returns OHLCV data and company name.
-- **`GET /refresh_analysis/{ticker}`**: Refreshes the stock data for a ticker by fetching only the missing dates from Yahoo Finance.
-- **`GET /cache_status`**: Returns the timestamp of the latest cache refresh.
-
-### Data Flow
-1. The frontend requests stock data for multiple tickers via `analyzeTrackedStocks`, which calls `/stocks/{ticker}` for each ticker.
-2. If cached data is valid (within 24 hours), it is served from the `analysis_cache` table.
-3. If the cache is invalid or missing, the backend fetches fresh data from `yfinance`, stores it in `ohlcv`, and caches the result.
-4. The frontend processes the data to calculate technical indicators and display them in the table and charts.
-
----
-
-## Setup and Installation
+## Setup and Development
 
 ### Prerequisites
-- **Node.js** (v16 or later) and **npm** for the frontend.
-- **Python** (v3.8 or later) and **pip** for the backend.
-- **SQLite** (pre-installed on most systems).
+- **Backend**: Python 3.9, Docker, Fly.io CLI.
+- **Frontend**: Node.js 18+, npm, Vercel CLI.
+- **Git**: For cloning the repository.
 
-### Backend Setup
-1. Navigate to the backend directory:
+### Local Development
+
+1. **Clone the Repository**:
+   ```bash
+   git clone https://github.com/jmcclay4/oversold
    ```
-   cd /path/to/stock-analyzer/backend
-   ```
-2. Create a virtual environment (optional but recommended):
-   ```
+
+2. **Backend Setup**:
+   ```bash
+   cd backend
    python3 -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-3. Install dependencies:
-   ```
+   source venv/bin/activate
    pip install -r requirements.txt
+   python main.py
    ```
-4. Initialize the database:
-   - Run `python3 main.py` to start the server and initialize the database with example tickers (MMM, AOS, ABT).
-5. (Optional) Run the backfill script to update company names:
-   ```
-   python3 backfill_company_names.py
-   ```
+   - Runs the FastAPI server at `http://localhost:8000`.
+   - Initializes `stocks.db` in the local directory.
 
-### Frontend Setup
-1. Navigate to the frontend directory:
-   ```
-   cd /path/to/stock-analyzer/frontend
-   ```
-2. Install dependencies:
-   ```
+3. **Frontend Setup**:
+   ```bash
+   cd frontend
    npm install
+   npm run dev
    ```
-3. Ensure Google Fonts are linked in `/public/index.html` for the custom font (Special Gothic Expanded One).
+   - Runs the React app at `http://localhost:5173`.
+   - Ensure the backend is running or update `stockDataService.ts` to point to `https://oversold-backend.fly.dev`.
 
----
+4. **Database Rebuild** (Optional):
+   ```bash
+   curl -X POST http://localhost:8000/rebuild-db
+   ```
+   - Populates `stocks.db` with S&P 500 data (takes ~10–15 minutes).
 
-## Running the Project
+### Deployment
 
-### Backend
-- Start the FastAPI server:
-  ```
-  cd /path/to/stock-analyzer/backend
-  python3 main.py
-  ```
-- The server will run on `http://0.0.0.0:8000`.
+1. **Backend (Fly.io)**:
+   ```bash
+   cd backend
+   flyctl auth login
+   flyctl deploy
+   ```
+   - Deploys to `https://oversold-backend.fly.dev`.
+   - Ensure `fly.toml` specifies the 1 GB volume:
+     ```toml
+     [[mounts]]
+       source = "stocks_data"
+       destination = "/data"
+     ```
 
-### Frontend
-- Start the React development server:
-  ```
-  cd /path/to/stock-analyzer/frontend
-  npm run dev
-  ```
-- The frontend will be available at `http://localhost:5173`.
+2. **Frontend (Vercel)**:
+   ```bash
+   cd frontend
+   vercel login
+   vercel
+   ```
+   - Deploys to `https://oversold.jmcclay.com`.
+   - Configure `API_BASE_URL` in `stockDataService.ts` to `https://oversold-backend.fly.dev`.
 
-### Interacting with the Application
-- **View Stocks**: The dashboard displays a table of stocks with technical indicators and status tags.
-- **Add/Remove Stocks**: Use the "Manage Stocks" menu to add or remove custom tickers.
-- **Favorites**: Click the star icon to favorite stocks, which are saved in `localStorage`.
-- **Refresh Data**: Click "Refresh Data" to update stock data for all tickers.
+3. **Post-Deployment**:
+   - Trigger database rebuild:
+     ```bash
+     curl -X POST https://oversold-backend.fly.dev/rebuild-db
+     ```
+   - Verify endpoints:
+     ```bash
+     curl https://oversold-backend.fly.dev/metadata
+     curl https://oversold-backend.fly.dev/stocks/ABBV
+     ```
 
----
+## Contributing
 
-## Known Issues and Improvements
+Contributions are welcome! Please:
+1. Fork the repository.
+2. Create a feature branch (`git checkout -b feature/your-feature`).
+3. Commit changes (`git commit -m "Add your feature"`).
+4. Push to the branch (`git push origin feature/your-feature`).
+5. Open a pull request.
 
-### Known Issues
-1. **401 Errors when Fetching Company Names**: Some tickers fail to retrieve company names due to `yfinance` API restrictions. Retries and user-agent headers are in place, but some tickers may still fail.
-2. **Slow Cache Retrieval**: SQLite performance can be slow for large datasets. Consider migrating to a faster database (e.g., PostgreSQL) or in-memory cache (e.g., Redis) for production.
-3. **Chart Rendering**: Ensure Chart.js is correctly installed and configured. If charts are missing, check for errors in `StockChart.tsx` or missing dependencies.
+Report issues or suggest features via [GitHub Issues](https://github.com/jmcclay4/oversold/issues).
 
-### Suggested Improvements
-1. **Server-Side Persistence for Favorites and Custom Tickers**: Currently stored in `localStorage`; implement user accounts or session-based storage for cross-device persistence.
-2. **Batch API Requests**: Optimize frontend requests by batching multiple tickers in a single API call.
-3. **Unit Tests**: Add tests for critical components (`calculateStochastic`, `calculateADXDMI`, API endpoints) using Jest and pytest.
-4. **UI/UX Enhancements**: Improve mobile responsiveness, add tooltips for status tags, and enhance chart interactivity.
-5. **Deployment**: Deploy the frontend to Vercel/Netlify and the backend to Render/Heroku with a managed database.
+## License
 
----
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
 
-This README provides a comprehensive overview of the **OVERSOLD** stock analyzer project, including its purpose, file structure, technologies, and setup instructions. It serves as a detailed guide for understanding the codebase and will enable an AI service (or any developer) to assist with improving the code and adding new features.
+## Acknowledgments
+
+- Built with inspiration from stock analysis tools like TradingView.
+- Thanks to Yahoo Finance for providing stock data via `yfinance`.
+- Powered by Fly.io and Vercel for seamless deployment.
