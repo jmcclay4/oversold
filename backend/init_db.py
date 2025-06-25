@@ -6,7 +6,7 @@ import numpy as np
 import logging
 import os
 import time
-from typing import List
+from typing import List, Optional
 from sp500_tickers import SP500_TICKERS
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

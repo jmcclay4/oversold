@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import sqlite3
 import logging
 import os
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 import uvicorn
@@ -13,7 +13,7 @@ from datetime import datetime
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-DB_PATH = "/data/stocks.db"  # Fly.io persistent volume
+DB_PATH = "/data/stocks.db"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -77,23 +77,23 @@ class OHLCV(BaseModel):
     low: float
     close: float
     volume: int
-    company_name: str | None
-    adx: float | None
-    pdi: float | None
-    mdi: float | None
-    k: float | None
-    d: float | None
+    company_name: Optional[str]
+    adx: Optional[float]
+    pdi: Optional[float]
+    mdi: Optional[float]
+    k: Optional[float]
+    d: Optional[float]
 
 class StockDataResponse(BaseModel):
     ohlcv: List[OHLCV]
 
 class BatchStockDataResponse(BaseModel):
     ticker: str
-    company_name: str | None
-    latest_ohlcv: OHLCV | None
+    company_name: Optional[str]
+    latest_ohlcv: Optional[OHLCV]
 
 class MetadataResponse(BaseModel):
-    last_ohlcv_update: str | None
+    last_ohlcv_update: Optional[str]
 
 @app.get("/stocks/tickers", response_model=List[str])
 async def get_all_tickers():
