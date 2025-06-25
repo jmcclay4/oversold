@@ -96,7 +96,7 @@ def rebuild_database():
         conn.commit()
         logger.info("Existing tables dropped")
         init_db()
-        tickers = ["ABBV"]  # Test with ABBV
+        tickers = SP500_TICKERS  # Use full S&P 500 tickers
         logger.info(f"Populating database with {len(tickers)} ticker(s)")
         end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=181)).strftime('%Y-%m-%d')  # Fetch extra day
@@ -388,7 +388,7 @@ def update_data(batch_size: int = 100):
             for ticker in batch:
                 latest_date = get_latest_date(ticker)
                 if latest_date:
-                    start_date = (pd.to_datetime(latest_date)).strftime('%Y-%m-%d')  # Fetch from latest date
+                    start_date = (pd.to_datetime(latest_date)).strftime('%Y-%m-%d')
                     if start_date >= end_date:
                         logger.info(f"No new data needed for {ticker}, latest date: {latest_date}")
                         continue
