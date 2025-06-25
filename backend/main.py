@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 import sqlite3
 import logging
@@ -133,8 +133,9 @@ async def get_stock_data(ticker: str):
         conn.close()
 
 @app.post("/stocks/batch", response_model=List[BatchStockDataResponse])
-async def get_batch_stock_data(tickers: List[str]):
+async def get_batch_stock_data(tickers: List[str], response: Response):
     logger.info(f"Received batch request for {len(tickers)} tickers")
+    response.headers["Cache-Control"] = "no-cache"
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -180,8 +181,9 @@ async def get_batch_stock_data(tickers: List[str]):
         conn.close()
 
 @app.get("/metadata", response_model=MetadataResponse)
-async def get_metadata():
+async def get_metadata(response: Response):
     logger.info("Received request for metadata")
+    response.headers["Cache-Control"] = "no-cache"
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
