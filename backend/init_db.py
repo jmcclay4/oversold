@@ -96,10 +96,10 @@ def rebuild_database():
         conn.commit()
         logger.info("Existing tables dropped")
         init_db()
-        tickers = ["ABBV"]  # Test with ABBV only
+        tickers = ["ABBV"]  # Test with ABBV
         logger.info(f"Populating database with {len(tickers)} ticker(s)")
         end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-        start_date = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
+        start_date = (datetime.now() - timedelta(days=181)).strftime('%Y-%m-%d')  # Fetch extra day
         for ticker in tickers:
             logger.info(f"Fetching initial data for {ticker} from {start_date} to {end_date}")
             df = fetch_yfinance_data(ticker, start_date, end_date)
@@ -194,7 +194,7 @@ def calculate_adx_dmi(df: pd.DataFrame, dmi_period: int = 14, adx_period: int = 
             if (high[i] is None or low[i] is None or close[i-1] is None or 
                 high[i-1] is None or low[i-1] is None or
                 high[i] <= low[i] or close[i] <= 0):
-                logger.warning(f"Skipping row {i} (Date={df['Date'].iloc[i]}) due to invalid OHLCV: High={high[i]}, Low={low[i]}, Close={close[i]}")
+                logger.warning(f"Skipping row {i} (Date={df['Date'].iloc[i]}): High={high[i]}, Low={low[i]}, Close={close[i]}")
                 continue
             tr[i] = max(high[i] - low[i], abs(high[i] - close[i-1]), abs(low[i] - close[i-1]))
             up_move = high[i] - high[i-1]
@@ -210,20 +210,31 @@ def calculate_adx_dmi(df: pd.DataFrame, dmi_period: int = 14, adx_period: int = 
         
         pdi = np.array([None] * n, dtype=float)
         mdi = np.array([None] * n, dtype=float)
+        dx = np.array([None] * n, dtype=float)
         for i in range(dmi_period-1, n):
             if smoothed_tr[i] is None or smoothed_tr[i] == 0 or smoothed_dm_plus[i] is None or smoothed_dm_minus[i] is None:
-                pdi[i] = mdi[i] = None
+                pdi[i] = mdi[i] = dx[i] = None
+                continue
+            pdi[i] = 100 * smoothed_dm_plus[i] / smoothed_tr[i]
+            mdi[i] = 100 * smoothed_dm_minus[i] / smoothed_tr[i]
+            di_sum = pdi[i] + mdi[i]
+            if di_sum == 0:
+                dx[i] = 0
             else:
-                pdi[i] = 100 * smoothed_dm_plus[i] / smoothed_tr[i]
-                mdi[i] = 100 * smoothed_dm_minus[i] / smoothed_tr[i]
+                dx[i] = 100 * abs(pdi[i] - mdi[i]) / di_sum
             if i == n-1:
                 logger.info(f"Last row smoothing: Smoothed_TR={smoothed_tr[i]}, Smoothed_+DM={smoothed_dm_plus[i]}, Smoothed_-DM={smoothed_dm_minus[i]}")
-                logger.info(f"Last row indicators: PDI={pdi[i]}, MDI={mdi[i]}")
+                logger.info(f"Last row indicators: PDI={pdi[i]}, MDI={mdi[i]}, DX={dx[i]}")
+        
+        adx = wilders_smoothing(dx, adx_period)
+        for i in range(dmi_period-1, n):
+            if i == n-1 and adx[i] is not None:
+                logger.info(f"Last row ADX: {adx[i]}")
         
         pdi = np.where(np.isnan(pdi) | (pdi == 0), None, pdi)
         mdi = np.where(np.isnan(mdi) | (mdi == 0), None, mdi)
+        adx = np.where(np.isnan(adx) | (adx == 0), None, adx)
         
-        adx = np.array([None] * n)  # Skip ADX for now to focus on PDI/MDI
         return adx, pdi, mdi
     except Exception as e:
         logger.error(f"Error in ADX/DMI calculation: {e}")
@@ -278,6 +289,9 @@ def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataF
                 return pd.DataFrame()
             if (df['Close'] <= 0).any() or (df['High'] <= df['Low']).any():
                 logger.warning(f"Suspicious OHLCV data for {ticker} (zero/negative close or high<=low)")
+                return pd.DataFrame()
+            if len(df) < 2:
+                logger.warning(f"Insufficient data for {ticker}: need at least 2 days for percent change, got {len(df)}")
                 return pd.DataFrame()
             try:
                 adx, pdi, mdi = calculate_adx_dmi(df)
@@ -374,12 +388,12 @@ def update_data(batch_size: int = 100):
             for ticker in batch:
                 latest_date = get_latest_date(ticker)
                 if latest_date:
-                    start_date = (pd.to_datetime(latest_date) + timedelta(days=1)).strftime('%Y-%m-%d')
-                    if start_date > end_date:
+                    start_date = (pd.to_datetime(latest_date)).strftime('%Y-%m-%d')  # Fetch from latest date
+                    if start_date >= end_date:
                         logger.info(f"No new data needed for {ticker}, latest date: {latest_date}")
                         continue
                 else:
-                    start_date = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
+                    start_date = (datetime.now() - timedelta(days=181)).strftime('%Y-%m-%d')
                 logger.info(f"Fetching data for {ticker} from {start_date} to {end_date}")
                 df = fetch_yfinance_data(ticker, start_date, end_date)
                 logger.info(f"Fetched {len(df)} rows for {ticker}, last date: {df['Date'].iloc[-1] if not df.empty else 'empty'}")
