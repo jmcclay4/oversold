@@ -101,7 +101,7 @@ def rebuild_database():
         logger.info(f"Populating database with {len(tickers)} ticker(s)")
         end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=181)).strftime('%Y-%m-%d')
-        for ticker in range(len(tickers)):
+        for ticker in tickers:
             logger.info(f"Fetching data for {tickers}: {ticker}")
             df = fetch_yfinance_data(ticker, start_date, end_date)
             logger.info(f"Fetched {len(df)} rows for {ticker}, last date: {df['Date'].iloc[-1] if not df.empty else 'empty'}")
