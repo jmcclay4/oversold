@@ -8,30 +8,48 @@ from pydantic import BaseModel
 from contextlib import asynccontextmanager
 import uvicorn
 from init_db import init_db, update_data, rebuild_database
+from datetime import datetime
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "stocks.db")
+DB_PATH = "/data/stocks.db"  # Fly.io persistent volume
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Starting up FastAPI application")
+    logger.info("Starting FastAPI application")
     try:
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
         if not os.path.exists(DB_PATH):
-            logger.warning(f"Database file {DB_PATH} not found, initializing...")
+            logger.warning(f"Database file {DB_PATH} not found, initializing")
             init_db()
             logger.info(f"Database initialized at {DB_PATH}")
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ohlcv'")
         if not cursor.fetchone():
-            logger.warning("Table 'ohlcv' does not exist, initializing database...")
+            logger.warning("Table 'ohlcv' does not exist, initializing database")
             conn.close()
             init_db()
             logger.info("Database tables created")
         else:
-            logger.info("Database connection verified")
+            cursor.execute("SELECT last_update FROM metadata WHERE key = 'last_ohlcv_update'")
+            result = cursor.fetchone()
+            last_update = result[0] if result else None
+            if last_update:
+                last_update_dt = datetime.strptime(last_update, "%Y-%m-%d %H:%M:%S")
+                if (datetime.now() - last_update_dt).days >= 1:
+                    logger.warning(f"Database outdated (last update: {last_update}), rebuilding")
+                    conn.close()
+                    rebuild_database()
+                    logger.info("Database rebuilt on startup")
+                else:
+                    logger.info("Database is up-to-date")
+            else:
+                logger.warning("No last_ohlcv_update found, rebuilding database")
+                conn.close()
+                rebuild_database()
+                logger.info("Database rebuilt on startup")
     except Exception as e:
         logger.error(f"Error during startup: {e}")
         raise
@@ -226,5 +244,5 @@ async def rebuild_database_endpoint():
         raise HTTPException(status_code=500, detail=f"Failed to rebuild database: {str(e)}")
 
 if __name__ == "__main__":
-    logger.info("Starting Uvicorn server...")
+    logger.info("Starting Uvicorn server")
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -1,7 +1,7 @@
 import { OHLCV, StockAnalysisResult, IndicatorValues, BatchStockDataResponse } from '../types';
 import { ADX_TREND_STRENGTH_THRESHOLD, DMI_CROSSOVER_PROXIMITY_PERCENTAGE } from '../constants';
 
-const API_BASE_URL = 'https://oversold-backend.onrender.com';
+const API_BASE_URL = 'https://oversold-backend.fly.dev';
 const BATCH_SIZE = 50;
 
 const fetchStockData = async (ticker: string): Promise<OHLCV[]> => {

@@ -12,7 +12,7 @@ from sp500_tickers import SP500_TICKERS
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "stocks.db")
+DB_PATH = "/data/stocks.db"  # Fly.io persistent volume
 
 def wilders_smoothing(data: np.ndarray, period: int) -> np.ndarray:
     smoothed = np.array([None] * len(data), dtype=float)
@@ -24,7 +24,7 @@ def wilders_smoothing(data: np.ndarray, period: int) -> np.ndarray:
         smoothed[period-1] = np.mean(valid_data)
     for i in range(period, len(data)):
         if data[i] is None or np.isnan(data[i]):
-            smoothed[i] = smoothed[i-1]
+            smoothed[i] = None
         elif smoothed[i-1] is None or np.isnan(smoothed[i-1]):
             valid_count = sum(1 for x in data[i-period+1:i+1] if x is not None and not np.isnan(x))
             if valid_count > 0:
@@ -34,12 +34,13 @@ def wilders_smoothing(data: np.ndarray, period: int) -> np.ndarray:
         else:
             smoothed[i] = (smoothed[i-1] * (period-1) + data[i]) / period
         if i == len(data)-1:
-            logger.info(f"Wilder's smoothing for last row: Input={data[i]}, Smoothed={smoothed[i]}")
+            logger.info(f"Wilder's smoothing: Input={data[i]}, Smoothed={smoothed[i]}")
     return smoothed
 
 def init_db():
-    logger.info("Starting init_db function...")
+    logger.info("Starting init_db function")
     try:
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)  # Ensure /data exists
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("""
@@ -64,7 +65,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS company_names (
                 ticker TEXT PRIMARY KEY,
                 company_name TEXT NOT NULL,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                timestamp TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
         cursor.execute("""
@@ -78,7 +79,7 @@ def init_db():
             VALUES ('last_ohlcv_update', ?)
         """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
         conn.commit()
-        logger.info(f"Database initialized successfully at {DB_PATH}")
+        logger.info(f"Database initialized at {DB_PATH}")
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
         raise
@@ -86,7 +87,7 @@ def init_db():
         conn.close()
 
 def rebuild_database():
-    logger.info("Starting database rebuild...")
+    logger.info("Starting database rebuild")
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -96,12 +97,12 @@ def rebuild_database():
         conn.commit()
         logger.info("Existing tables dropped")
         init_db()
-        tickers = SP500_TICKERS  # Use full S&P 500 tickers
+        tickers = SP500_TICKERS
         logger.info(f"Populating database with {len(tickers)} ticker(s)")
         end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-        start_date = (datetime.now() - timedelta(days=181)).strftime('%Y-%m-%d')  # Fetch extra day
-        for ticker in tickers:
-            logger.info(f"Fetching initial data for {ticker} from {start_date} to {end_date}")
+        start_date = (datetime.now() - timedelta(days=181)).strftime('%Y-%m-%d')
+        for ticker in range(len(tickers)):
+            logger.info(f"Fetching data for {tickers}: {ticker}")
             df = fetch_yfinance_data(ticker, start_date, end_date)
             logger.info(f"Fetched {len(df)} rows for {ticker}, last date: {df['Date'].iloc[-1] if not df.empty else 'empty'}")
             store_stock_data(ticker, df)
@@ -139,7 +140,7 @@ def get_cached_company_name(ticker: str) -> str | None:
         logger.info(f"Retrieved company name for {ticker}: {result[0] if result else None}")
         return result[0] if result else None
     except Exception as e:
-        logger.error(f"Error retrieving cached company name for {ticker}: {e}")
+        logger.error(f"Error retrieving company name for {ticker}: {e}")
         return None
     finally:
         conn.close()
@@ -165,9 +166,9 @@ def get_all_tickers() -> List[str]:
         cursor = conn.cursor()
         cursor.execute("SELECT DISTINCT ticker FROM ohlcv ORDER BY ticker")
         tickers = [row[0] for row in cursor.fetchall()]
-        logger.info(f"Retrieved {len(tickers)} tickers from database: {tickers}")
+        logger.info(f"Retrieved {len(tickers)} tickers from database")
         if not tickers:
-            logger.warning("No tickers found in database, using S&P 500 tickers")
+            logger.warning("No tickers found, using S&P 500 tickers")
             tickers = SP500_TICKERS
         return tickers
     except Exception as e:
@@ -175,14 +176,14 @@ def get_all_tickers() -> List[str]:
         return SP500_TICKERS
 
 def calculate_adx_dmi(df: pd.DataFrame, dmi_period: int = 14, adx_period: int = 14):
-    logger.info("Calculating ADX and DMI...")
+    logger.info("Calculating ADX and DMI")
     try:
         high = df['High'].values
         low = df['Low'].values
         close = df['Close'].values
         n = len(df)
         if n < dmi_period + 1:
-            logger.warning(f"Not enough data for DMI calculation (need {dmi_period + 1}, got {n})")
+            logger.warning(f"Not enough data for DMI (need {dmi_period + 1}, got {n})")
             return np.array([None] * n), np.array([None] * n), np.array([None] * n)
         
         logger.info(f"Last row OHLCV: Date={df['Date'].iloc[-1]}, High={high[-1]}, Low={low[-1]}, Close={close[-1]}")
@@ -241,11 +242,11 @@ def calculate_adx_dmi(df: pd.DataFrame, dmi_period: int = 14, adx_period: int = 
         return np.array([None] * len(df)), np.array([None] * len(df)), np.array([None] * len(df))
 
 def calculate_stochastic(df: pd.DataFrame, k_period: int = 14, d_period: int = 3):
-    logger.info("Calculating Stochastic...")
+    logger.info("Calculating Stochastic")
     try:
         n = len(df)
         if n < k_period + d_period - 1:
-            logger.warning(f"Not enough data for Stochastic calculation (need {k_period + d_period - 1}, got {n})")
+            logger.warning(f"Not enough data for Stochastic (need {k_period + d_period - 1}, got {n})")
             return np.array([None] * n), np.array([None] * n)
         
         low_min = df['Low'].rolling(window=k_period, min_periods=k_period).min()
@@ -291,7 +292,7 @@ def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataF
                 logger.warning(f"Suspicious OHLCV data for {ticker} (zero/negative close or high<=low)")
                 return pd.DataFrame()
             if len(df) < 2:
-                logger.warning(f"Insufficient data for {ticker}: need at least 2 days for percent change, got {len(df)}")
+                logger.warning(f"Insufficient data for {ticker}: need at least 2 days, got {len(df)}")
                 return pd.DataFrame()
             try:
                 adx, pdi, mdi = calculate_adx_dmi(df)
@@ -377,7 +378,7 @@ def delete_old_data(max_age_days: int = 180):
         conn.close()
 
 def update_data(batch_size: int = 100):
-    logger.info("Updating stock data...")
+    logger.info("Updating stock data")
     try:
         tickers = get_all_tickers()
         logger.info(f"Processing {len(tickers)} tickers from database")
