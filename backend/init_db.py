@@ -131,7 +131,9 @@ def update_metadata():
     finally:
         conn.close()
 
-def get_cached_company_name(ticker: str) -> str | None:
+from typing import Optional
+
+def get_cached_company_name(ticker: str) -> Optional[str]:
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -351,7 +353,7 @@ def store_stock_data(ticker: str, df: pd.DataFrame):
     finally:
         conn.close()
 
-def get_latest_date(ticker: str) -> str | None:
+def get_latest_date(ticker: str) -> Optional[str]:
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()

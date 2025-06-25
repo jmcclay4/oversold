@@ -63,10 +63,11 @@ app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "https://oversold.jmcclay.com"],
+    allow_origins=["http://localhost:5173", "https://oversold.jmcclay.com", "https://*.vercel.app"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["Access-Control-Allow-Origin"],
 )
 
 class OHLCV(BaseModel):
