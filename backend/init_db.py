@@ -8,6 +8,7 @@ import os
 import time
 from typing import List, Optional
 from sp500_tickers import SP500_TICKERS
+import pytz
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -362,14 +363,26 @@ def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataF
     if not isinstance(ticker, str):
         logger.error(f"Invalid ticker type for {ticker}: expected str, got {type(ticker)}")
         return pd.DataFrame()
-    retries = 5  # Increased retries
-    delay = 1.0  # Increased delay
+    retries = 5
+    delay = 1.0
     cached_name = get_cached_company_name(ticker)
     company_name = cached_name or f"{ticker} Inc."
+    # Adjust end_date to today if after market close (3 PM CDT)
+    current_time = datetime.now()
+    cdt_tz = pytz.timezone('America/Chicago')
+    current_cdt = current_time.astimezone(cdt_tz)
+    market_close = current_cdt.replace(hour=15, minute=0, second=0, microsecond=0)
+    if current_cdt >= market_close:
+        end_date = current_cdt.strftime('%Y-%m-%d')
     for attempt in range(1, retries + 1):
         try:
             logger.info(f"Fetching yfinance data for {ticker}, attempt {attempt}, start: {start_date}, end: {end_date}")
             stock = yf.Ticker(ticker.upper())
+            # Check if ticker is valid
+            info = stock.info
+            if not info or 'symbol' not in info:
+                logger.warning(f"Ticker {ticker} may be delisted or invalid")
+                return pd.DataFrame()
             df = stock.history(start=start_date, end=end_date, auto_adjust=True)
             if df.empty:
                 logger.warning(f"No data found for {ticker}")
@@ -380,7 +393,7 @@ def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataF
             df = df.sort_values('date').drop_duplicates('date', keep='last')
             logger.info(f"Fetched {len(df)} rows for {ticker}, dates: {df['date'].iloc[0]} to {df['date'].iloc[-1]}, columns: {list(df.columns)}")
             if not cached_name:
-                company_name = stock.info.get('longName', f"{ticker} Inc.")
+                company_name = info.get('longName', f"{ticker} Inc.")
                 store_company_name(ticker, company_name)
             df['company_name'] = company_name
             required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
@@ -397,7 +410,6 @@ def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataF
                 time.sleep(delay * (2 ** attempt))
             else:
                 logger.error(f"Failed to fetch data for {ticker}: {e}")
-                return pd.DataFrame()
 
 def store_stock_data(ticker: str, df: pd.DataFrame):
     if df.empty:
