@@ -188,6 +188,19 @@ def get_all_tickers() -> List[str]:
         logger.error(f"Error retrieving tickers: {e}")
         return [t for t in SP500_TICKERS if isinstance(t, str)]
 
+def get_latest_date(ticker: str) -> Optional[str]:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT MAX(date) FROM ohlcv WHERE ticker = ?", (ticker,))
+        result = cursor.fetchone()
+        return result[0] if result and result[0] else None
+    except Exception as e:
+        logger.error(f"Error getting latest date for {ticker}: {e}")
+        return None
+    finally:
+        conn.close()
+
 def get_latest_db_date() -> Optional[str]:
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -424,33 +437,112 @@ def store_stock_data(ticker: str, df: pd.DataFrame):
     finally:
         conn.close()
 
-def get_latest_date(ticker: str) -> Optional[str]:
+def update_data(batch_size: int = 100, max_entries: int = 200, historical_days: int = 30, use_db_only: bool = False):
+    logger.info("Updating stock data")
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT MAX(date) FROM ohlcv WHERE ticker = ?", (ticker,))
-        result = cursor.fetchone()
-        return result[0] if result and result[0] else None
+        # Get the latest date in the database
+        latest_db_date = get_latest_db_date()
+        current_date = datetime.now().date()
+        end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')  # Yesterday
+        if not latest_db_date:
+            logger.warning("No data in database, triggering full rebuild")
+            rebuild_database()
+            return
+        
+        # Check if data is stale (not same as current date)
+        latest_db_datetime = pd.to_datetime(latest_db_date).date()
+        logger.info(f"Latest database date: {latest_db_date}, current date: {current_date}")
+        if latest_db_datetime >= current_date:
+            logger.info("Database is up-to-date (same as or newer than current date), no update needed")
+            return
+        
+        # Generate list of missing dates
+        missing_dates = []
+        current = latest_db_datetime + timedelta(days=1)
+        while current <= current_date - timedelta(days=1):
+            missing_dates.append(current.strftime('%Y-%m-%d'))
+            current += timedelta(days=1)
+        logger.info(f"Missing dates to fetch: {missing_dates}")
+        
+        # Verify ticker consistency
+        tickers = get_all_tickers()
+        logger.info(f"Processing {len(tickers)} tickers from database")
+        inconsistent_tickers = []
+        for ticker in tickers:
+            ticker_latest_date = get_latest_date(ticker)
+            if ticker_latest_date != latest_db_date:
+                inconsistent_tickers.append((ticker, ticker_latest_date))
+        if inconsistent_tickers:
+            logger.warning(f"Inconsistent latest dates detected: {inconsistent_tickers}")
+            logger.info("Triggering full rebuild to ensure consistency")
+            rebuild_database()
+            return
+        
+        # Define required columns
+        required_columns = ['date', 'Open', 'High', 'Low', 'Close', 'Volume', 'company_name']
+        
+        # Process each ticker
+        for i in range(0, len(tickers), batch_size):
+            batch = tickers[i:i + batch_size]
+            logger.info(f"Processing batch {i//batch_size + 1} with tickers: {batch}")
+            for ticker in batch:
+                # Fetch historical data (last 30 days)
+                historical_df = get_historical_data(ticker, days=historical_days)
+                if historical_df.empty and latest_db_date:
+                    logger.warning(f"No historical data for {ticker}, fetching full range")
+                
+                # Fetch new data from yfinance unless using db only
+                new_df = pd.DataFrame()
+                if not use_db_only and missing_dates:
+                    start_date = min(missing_dates)
+                    new_df = fetch_yfinance_data(ticker, start_date, end_date)
+                    logger.info(f"Fetched {len(new_df)} rows for {ticker}, last date: {new_df['date'].iloc[-1] if not new_df.empty else 'empty'}, columns: {list(new_df.columns) if not new_df.empty else 'empty'}")
+                
+                # Combine historical and new data
+                combined_df = pd.concat([historical_df, new_df], ignore_index=True)
+                if combined_df.empty:
+                    logger.warning(f"Combined DataFrame is empty for {ticker}, skipping")
+                    continue
+                
+                combined_df = combined_df.drop_duplicates(subset=['date'], keep='last').sort_values('date')
+                logger.info(f"Combined {len(combined_df)} rows for {ticker}, dates: {combined_df['date'].iloc[0] if not combined_df.empty else 'empty'} to {combined_df['date'].iloc[-1] if not combined_df.empty else 'empty'}, columns: {list(combined_df.columns)}")
+                
+                # Ensure consistent columns
+                missing_cols = [col for col in required_columns if col not in combined_df.columns]
+                for col in missing_cols:
+                    combined_df[col] = None
+                combined_df = combined_df[required_columns]
+                
+                # Recalculate indicators if enough data
+                if len(combined_df) >= max(14 + 1, 14 + 3):
+                    try:
+                        adx, pdi, mdi = calculate_adx_dmi(combined_df)
+                        k, d = calculate_stochastic(combined_df)
+                        combined_df['adx'] = adx
+                        combined_df['pdi'] = pdi
+                        combined_df['mdi'] = mdi
+                        combined_df['k'] = k
+                        combined_df['d'] = d
+                    except Exception as e:
+                        logger.error(f"Indicator calculation failed for {ticker}: {e}")
+                        combined_df['adx'] = combined_df['pdi'] = combined_df['mdi'] = combined_df['k'] = combined_df['d'] = None
+                
+                # Store recalculated indicators for the latest historical date or new data
+                update_df = combined_df[combined_df['date'] >= latest_db_date]
+                if not update_df.empty:
+                    store_stock_data(ticker, update_df)
+                    trim_excess_entries(ticker, max_entries)
+                else:
+                    logger.warning(f"No data to store for {ticker} after date {latest_db_date}")
+                time.sleep(0.2)
+        
+        # Delete data older than 180 days
+        delete_old_data(max_age_days=180)
+        update_metadata()
+        logger.info("Data update completed")
     except Exception as e:
-        logger.error(f"Error getting latest date for {ticker}: {e}")
-        return None
-    finally:
-        conn.close()
-
-def delete_old_data(max_age_days: int = 180):
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cutoff_date = (datetime.now() - timedelta(days=max_age_days)).strftime('%Y-%m-%d')
-        cursor.execute("DELETE FROM ohlcv WHERE date < ?", (cutoff_date,))
-        conn.commit()
-        logger.info(f"Deleted data older than {cutoff_date}")
-    except Exception as e:
-        logger.error(f"Error deleting old data: {e}")
-    finally:
-        conn.close()
-
-def update_data(batch_size: int = 100, max_entries: int = 200, historical_days: int = 30):
+        logger.error(f"Error updating data: {e}")
+        raise
     logger.info("Updating stock data")
     try:
         # Get the latest date in the database
@@ -460,14 +552,12 @@ def update_data(batch_size: int = 100, max_entries: int = 200, historical_days: 
             rebuild_database()
             return
         
-        # Check if data is stale (>= 2 days old)
-        latest_db_datetime = pd.to_datetime(latest_db_date)
+        # Check if data is stale (not same as current date)
+        latest_db_datetime = pd.to_datetime(latest_db_date).date()
         current_date = datetime.now().date()
-        days_diff = (current_date - latest_db_datetime.date()).days
-        logger.info(f"Latest database date: {latest_db_date}, days since last update: {days_diff}")
-        
-        if days_diff < 2:
-            logger.info("Database is up-to-date (less than 2 days old), no update needed")
+        logger.info(f"Latest database date: {latest_db_date}, current date: {current_date}")
+        if latest_db_datetime >= current_date:
+            logger.info("Database is up-to-date (same as or newer than current date), no update needed")
             return
         
         # Determine the most recent available date (yesterday)
