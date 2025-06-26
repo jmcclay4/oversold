@@ -1,3 +1,4 @@
+
 import sqlite3
 import yfinance as yf
 import pandas as pd
@@ -12,7 +13,7 @@ from sp500_tickers import SP500_TICKERS
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-DB_PATH = "/data/stocks.db"  # Fly.io persistent volume
+DB_PATH = "/data/stocks.db"
 
 def wilders_smoothing(data: np.ndarray, period: int) -> np.ndarray:
     smoothed = np.array([None] * len(data), dtype=float)
@@ -40,7 +41,7 @@ def wilders_smoothing(data: np.ndarray, period: int) -> np.ndarray:
 def init_db():
     logger.info("Starting init_db function")
     try:
-        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)  # Ensure /data exists
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("""
@@ -97,16 +98,17 @@ def rebuild_database():
         conn.commit()
         logger.info("Existing tables dropped")
         init_db()
-        tickers = SP500_TICKERS
-        logger.info(f"Populating database with {len(tickers)} ticker(s)")
+        tickers = [t for t in SP500_TICKERS if isinstance(t, str)]
+        logger.info(f"Populating database with {len(tickers)} valid ticker(s)")
         end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=181)).strftime('%Y-%m-%d')
         for ticker in tickers:
-            logger.info(f"Fetching data for {tickers}: {ticker}")
+            logger.info(f"Fetching data for {ticker}")
             df = fetch_yfinance_data(ticker, start_date, end_date)
             logger.info(f"Fetched {len(df)} rows for {ticker}, last date: {df['Date'].iloc[-1] if not df.empty else 'empty'}")
             store_stock_data(ticker, df)
             time.sleep(0.2)
+        logger.info(f"Successfully populated database with data for {len(tickers)} tickers")
         update_metadata()
         logger.info("Database rebuild completed")
     except Exception as e:
@@ -130,8 +132,6 @@ def update_metadata():
         logger.error(f"Error updating metadata: {e}")
     finally:
         conn.close()
-
-from typing import Optional
 
 def get_cached_company_name(ticker: str) -> Optional[str]:
     try:
@@ -171,11 +171,49 @@ def get_all_tickers() -> List[str]:
         logger.info(f"Retrieved {len(tickers)} tickers from database")
         if not tickers:
             logger.warning("No tickers found, using S&P 500 tickers")
-            tickers = SP500_TICKERS
+            tickers = [t for t in SP500_TICKERS if isinstance(t, str)]
         return tickers
     except Exception as e:
         logger.error(f"Error retrieving tickers: {e}")
-        return SP500_TICKERS
+        return [t for t in SP500_TICKERS if isinstance(t, str)]
+
+def get_latest_db_date() -> Optional[str]:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT MAX(date) FROM ohlcv")
+        result = cursor.fetchone()
+        latest_date = result[0] if result and result[0] else None
+        logger.info(f"Latest date in database: {latest_date}")
+        return latest_date
+    except Exception as e:
+        logger.error(f"Error retrieving latest date: {e}")
+        return None
+    finally:
+        conn.close()
+
+def trim_excess_entries(ticker: str, max_entries: int = 200):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM ohlcv WHERE ticker = ?", (ticker,))
+        count = cursor.fetchone()[0]
+        if count > max_entries:
+            cursor.execute("""
+                DELETE FROM ohlcv
+                WHERE ticker = ? AND date IN (
+                    SELECT date FROM ohlcv
+                    WHERE ticker = ?
+                    ORDER BY date ASC
+                    LIMIT ?
+                )
+            """, (ticker, ticker, count - max_entries))
+            conn.commit()
+            logger.info(f"Deleted {count - max_entries} oldest entries for {ticker}")
+    except Exception as e:
+        logger.error(f"Error trimming entries for {ticker}: {e}")
+    finally:
+        conn.close()
 
 def calculate_adx_dmi(df: pd.DataFrame, dmi_period: int = 14, adx_period: int = 14):
     logger.info("Calculating ADX and DMI")
@@ -234,9 +272,9 @@ def calculate_adx_dmi(df: pd.DataFrame, dmi_period: int = 14, adx_period: int = 
             if i == n-1 and adx[i] is not None:
                 logger.info(f"Last row ADX: {adx[i]}")
         
+        adx = np.where(np.isnan(adx) | (adx == 0), None, adx)
         pdi = np.where(np.isnan(pdi) | (pdi == 0), None, pdi)
         mdi = np.where(np.isnan(mdi) | (mdi == 0), None, mdi)
-        adx = np.where(np.isnan(adx) | (adx == 0), None, adx)
         
         return adx, pdi, mdi
     except Exception as e:
@@ -266,6 +304,9 @@ def calculate_stochastic(df: pd.DataFrame, k_period: int = 14, d_period: int = 3
         return np.array([None] * len(df)), np.array([None] * len(df))
 
 def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataFrame:
+    if not isinstance(ticker, str):
+        logger.error(f"Invalid ticker type for {ticker}: expected str, got {type(ticker)}")
+        return pd.DataFrame()
     retries = 3
     delay = 0.2
     cached_name = get_cached_company_name(ticker)
@@ -273,7 +314,7 @@ def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataF
     for attempt in range(1, retries + 1):
         try:
             logger.info(f"Fetching yfinance data for {ticker}, attempt {attempt}, start: {start_date}, end: {end_date}")
-            stock = yf.Ticker(ticker)
+            stock = yf.Ticker(ticker.upper())
             df = stock.history(start=start_date, end=end_date, auto_adjust=True)
             if df.empty:
                 logger.warning(f"No data found for {ticker}")
@@ -379,29 +420,58 @@ def delete_old_data(max_age_days: int = 180):
     finally:
         conn.close()
 
-def update_data(batch_size: int = 100):
+def update_data(batch_size: int = 100, max_entries: int = 200):
     logger.info("Updating stock data")
     try:
+        # Get the latest date in the database
+        latest_db_date = get_latest_db_date()
+        if not latest_db_date:
+            logger.warning("No data in database, triggering full rebuild")
+            rebuild_database()
+            return
+        
+        # Check if data is stale (>= 2 days old)
+        latest_db_datetime = pd.to_datetime(latest_db_date)
+        current_date = datetime.now().date()
+        days_diff = (current_date - latest_db_datetime.date()).days
+        logger.info(f"Latest database date: {latest_db_date}, days since last update: {days_diff}")
+        
+        if days_diff < 2:
+            logger.info("Database is up-to-date (less than 2 days old), no update needed")
+            return
+        
+        # Determine the most recent available date (yesterday)
+        end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+        start_date = (latest_db_datetime + timedelta(days=1)).strftime('%Y-%m-%d')
+        
+        # Verify the latest date is consistent across tickers
         tickers = get_all_tickers()
         logger.info(f"Processing {len(tickers)} tickers from database")
-        end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+        inconsistent_tickers = []
+        for ticker in tickers:
+            ticker_latest_date = get_latest_date(ticker)
+            if ticker_latest_date != latest_db_date:
+                inconsistent_tickers.append((ticker, ticker_latest_date))
+        if inconsistent_tickers:
+            logger.warning(f"Inconsistent latest dates detected: {inconsistent_tickers}")
+            logger.info("Triggering full rebuild to ensure consistency")
+            rebuild_database()
+            return
+        
+        # Fetch and update data for each ticker
         for i in range(0, len(tickers), batch_size):
             batch = tickers[i:i + batch_size]
             logger.info(f"Processing batch {i//batch_size + 1} with tickers: {batch}")
             for ticker in batch:
-                latest_date = get_latest_date(ticker)
-                if latest_date:
-                    start_date = (pd.to_datetime(latest_date)).strftime('%Y-%m-%d')
-                    if start_date >= end_date:
-                        logger.info(f"No new data needed for {ticker}, latest date: {latest_date}")
-                        continue
-                else:
-                    start_date = (datetime.now() - timedelta(days=181)).strftime('%Y-%m-%d')
                 logger.info(f"Fetching data for {ticker} from {start_date} to {end_date}")
                 df = fetch_yfinance_data(ticker, start_date, end_date)
                 logger.info(f"Fetched {len(df)} rows for {ticker}, last date: {df['Date'].iloc[-1] if not df.empty else 'empty'}")
-                store_stock_data(ticker, df)
+                if not df.empty:
+                    store_stock_data(ticker, df)
+                    trim_excess_entries(ticker, max_entries)
                 time.sleep(0.2)
+        
+        # Delete data older than 180 days
         delete_old_data(max_age_days=180)
         update_metadata()
         logger.info("Data update completed")
