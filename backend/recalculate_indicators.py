@@ -8,7 +8,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 DB_PATH = "/data/stocks.db"
 
-def recalculate_indicators(ticker, date):
+def recalculate_indicators(ticker, date, period=9, k_period=9, d_period=3):
     conn = sqlite3.connect(DB_PATH)
     query = """
         SELECT date, open, high, low, close, volume, company_name
@@ -18,8 +18,8 @@ def recalculate_indicators(ticker, date):
         LIMIT 30
     """
     df = pd.read_sql_query(query, conn, params=(ticker, date))
-    if len(df) < 14:
-        logger.warning(f"Insufficient data for {ticker} on {date}: {len(df)} rows")
+    if len(df) < period:
+        logger.warning(f"Insufficient data for {ticker} on {date}: {len(df)} rows, need {period}")
         conn.close()
         return
     df = df.rename(columns={
@@ -27,33 +27,8 @@ def recalculate_indicators(ticker, date):
     })
     df = df.sort_values('date')
     try:
-        adx_dmi_result = calculate_adx_dmi(df)
-        stochastic_result = calculate_stochastic(df)
-        if isinstance(adx_dmi_result, tuple):
-            adx, pdi, mdi = adx_dmi_result
-            adx_dmi = pd.DataFrame({
-                'date': df['date'],
-                'adx': adx,
-                'pdi': pdi,
-                'mdi': mdi
-            })
-        elif isinstance(adx_dmi_result, np.ndarray):
-            adx_dmi = pd.DataFrame(adx_dmi_result, columns=['adx', 'pdi', 'mdi'])
-            adx_dmi['date'] = df['date'].values
-        else:
-            adx_dmi = adx_dmi_result
-        if isinstance(stochastic_result, tuple):
-            k, d = stochastic_result
-            stochastic = pd.DataFrame({
-                'date': df['date'],
-                'k': k,
-                'd': d
-            })
-        elif isinstance(stochastic_result, np.ndarray):
-            stochastic = pd.DataFrame(stochastic_result, columns=['k', 'd'])
-            stochastic['date'] = df['date'].values
-        else:
-            stochastic = stochastic_result
+        adx_dmi = calculate_adx_dmi(df, period=period)
+        stochastic = calculate_stochastic(df, k_period=k_period, d_period=d_period)
         if adx_dmi is None or stochastic is None or adx_dmi.empty or stochastic.empty:
             logger.warning(f"Failed to calculate indicators for {ticker} on {date}")
             conn.close()

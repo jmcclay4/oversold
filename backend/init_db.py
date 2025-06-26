@@ -261,7 +261,7 @@ def get_historical_data(ticker: str, days: int = 30) -> pd.DataFrame:
     finally:
         conn.close()
 
-def calculate_adx_dmi(df: pd.DataFrame, dmi_period: int = 14, adx_period: int = 14):
+def calculate_adx_dmi(df: pd.DataFrame, dmi_period: int = 9, adx_period: int = 9):
     logger.info("Calculating ADX and DMI")
     try:
         required_columns = ['High', 'Low', 'Close']
@@ -332,7 +332,7 @@ def calculate_adx_dmi(df: pd.DataFrame, dmi_period: int = 14, adx_period: int = 
         logger.error(f"Error in ADX/DMI calculation: {e}")
         return np.array([None] * len(df)), np.array([None] * len(df)), np.array([None] * len(df))
 
-def calculate_stochastic(df: pd.DataFrame, k_period: int = 14, d_period: int = 3):
+def calculate_stochastic(df: pd.DataFrame, k_period: int = 9, d_period: int = 3):
     logger.info("Calculating Stochastic")
     try:
         required_columns = ['High', 'Low', 'Close']
