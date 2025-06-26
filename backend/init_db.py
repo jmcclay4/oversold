@@ -568,7 +568,26 @@ def store_stock_data(ticker: str, df: pd.DataFrame):
     finally:
         conn.close()
 
-def update_data(batch_size: int = 100, max_entries: int = 200, historical_days: int = 30, use_db_only: bool = False):
+def update_data():
+    logger.info("Starting data update")
+    conn = sqlite3.connect(DB_PATH)
+    tickers = SP500_TICKERS
+    latest_db_date = get_latest_db_date()
+    start_date = (datetime.strptime(latest_db_date, '%Y-%m-%d') - timedelta(days=2)).strftime('%Y-%m-%d')
+    end_date = datetime.now().strftime('%Y-%m-%d')
+    for ticker in tickers:
+        logger.info(f"Processing {ticker}")
+        df = fetch_yfinance_data(ticker, start_date, end_date)
+        if not df.empty:
+            df = df.rename(columns={
+                'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'
+            })
+            store_data(ticker, df, conn)
+        time.sleep(0.5)
+    delete_old_data(max_age_days=180)
+    conn.commit()
+    conn.close()
+    logger.info("Data update completed")
     logger.info("Updating stock data")
     try:
         # Get the latest date in the database
