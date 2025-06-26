@@ -237,9 +237,9 @@ def get_historical_data(ticker: str, days: int = 30) -> pd.DataFrame:
             LIMIT ?
         """
         df = pd.read_sql_query(query, conn, params=(ticker, days))
-        df = df.rename(columns={'date': 'Date'})  # Standardize to 'Date'
-        df = df.sort_values('Date')  # Sort ascending for indicator calculations
-        logger.info(f"Retrieved {len(df)} rows of historical data for {ticker}")
+        df = df.rename(columns={'date': 'date', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'})
+        df = df.sort_values('date')  # Sort ascending for indicator calculations
+        logger.info(f"Retrieved {len(df)} rows of historical data for {ticker}, columns: {list(df.columns)}")
         return df
     except Exception as e:
         logger.error(f"Error retrieving historical data for {ticker}: {e}")
@@ -250,6 +250,11 @@ def get_historical_data(ticker: str, days: int = 30) -> pd.DataFrame:
 def calculate_adx_dmi(df: pd.DataFrame, dmi_period: int = 14, adx_period: int = 14):
     logger.info("Calculating ADX and DMI")
     try:
+        required_columns = ['High', 'Low', 'Close']
+        if not all(col in df.columns for col in required_columns):
+            logger.error(f"Missing required columns for ADX/DMI: {df.columns}")
+            return np.array([None] * len(df)), np.array([None] * len(df)), np.array([None] * len(df))
+        
         high = df['High'].values
         low = df['Low'].values
         close = df['Close'].values
@@ -258,7 +263,7 @@ def calculate_adx_dmi(df: pd.DataFrame, dmi_period: int = 14, adx_period: int = 
             logger.warning(f"Not enough data for DMI (need {dmi_period + 1}, got {n})")
             return np.array([None] * n), np.array([None] * n), np.array([None] * n)
         
-        logger.info(f"Last row OHLCV: Date={df['Date'].iloc[-1]}, High={high[-1]}, Low={low[-1]}, Close={close[-1]}")
+        logger.info(f"Last row OHLCV: Date={df['date'].iloc[-1]}, High={high[-1]}, Low={low[-1]}, Close={close[-1]}")
         
         tr = np.array([None] * n, dtype=float)
         dm_plus = np.array([None] * n, dtype=float)
@@ -267,7 +272,7 @@ def calculate_adx_dmi(df: pd.DataFrame, dmi_period: int = 14, adx_period: int = 
             if (high[i] is None or low[i] is None or close[i-1] is None or 
                 high[i-1] is None or low[i-1] is None or
                 high[i] <= low[i] or close[i] <= 0):
-                logger.warning(f"Skipping row {i} (Date={df['Date'].iloc[i]}): High={high[i]}, Low={low[i]}, Close={close[i]}")
+                logger.warning(f"Skipping row {i} (Date={df['date'].iloc[i]}): High={high[i]}, Low={low[i]}, Close={close[i]}")
                 continue
             tr[i] = max(high[i] - low[i], abs(high[i] - close[i-1]), abs(low[i] - close[i-1]))
             up_move = high[i] - high[i-1]
@@ -275,7 +280,7 @@ def calculate_adx_dmi(df: pd.DataFrame, dmi_period: int = 14, adx_period: int = 
             dm_plus[i] = up_move if up_move > down_move and up_move > 0 else 0
             dm_minus[i] = down_move if down_move > up_move and down_move > 0 else 0
             if i == n-1:
-                logger.info(f"Last row (Date={df['Date'].iloc[i]}): TR={tr[i]}, +DM={dm_plus[i]}, -DM={dm_minus[i]}")
+                logger.info(f"Last row (Date={df['date'].iloc[i]}): TR={tr[i]}, +DM={dm_plus[i]}, -DM={dm_minus[i]}")
         
         smoothed_tr = wilders_smoothing(tr, dmi_period)
         smoothed_dm_plus = wilders_smoothing(dm_plus, dmi_period)
@@ -316,6 +321,11 @@ def calculate_adx_dmi(df: pd.DataFrame, dmi_period: int = 14, adx_period: int = 
 def calculate_stochastic(df: pd.DataFrame, k_period: int = 14, d_period: int = 3):
     logger.info("Calculating Stochastic")
     try:
+        required_columns = ['High', 'Low', 'Close']
+        if not all(col in df.columns for col in required_columns):
+            logger.error(f"Missing required columns for Stochastic: {df.columns}")
+            return np.array([None] * len(df)), np.array([None] * len(df))
+        
         n = len(df)
         if n < k_period + d_period - 1:
             logger.warning(f"Not enough data for Stochastic (need {k_period + d_period - 1}, got {n})")
@@ -340,7 +350,7 @@ def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataF
         logger.error(f"Invalid ticker type for {ticker}: expected str, got {type(ticker)}")
         return pd.DataFrame()
     retries = 3
-    delay = 0.2
+    delay = 0.5  # Increased delay to avoid rate limits
     cached_name = get_cached_company_name(ticker)
     company_name = cached_name or f"{ticker} Inc."
     for attempt in range(1, retries + 1):
@@ -352,10 +362,10 @@ def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataF
                 logger.warning(f"No data found for {ticker}")
                 return pd.DataFrame()
             df = df.reset_index()
-            df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
-            df = df.rename(columns={'Date': 'date'})  # Standardize to 'date'
+            df['date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
+            df = df[['date', 'Open', 'High', 'Low', 'Close', 'Volume']]  # Select required columns
             df = df.sort_values('date').drop_duplicates('date', keep='last')
-            logger.info(f"Fetched {len(df)} rows for {ticker}, dates: {df['date'].iloc[0]} to {df['date'].iloc[-1]}")
+            logger.info(f"Fetched {len(df)} rows for {ticker}, dates: {df['date'].iloc[0]} to {df['date'].iloc[-1]}, columns: {list(df.columns)}")
             if not cached_name:
                 company_name = stock.info.get('longName', f"{ticker} Inc.")
                 store_company_name(ticker, company_name)
@@ -381,6 +391,10 @@ def store_stock_data(ticker: str, df: pd.DataFrame):
         logger.warning(f"No data to store for {ticker}")
         return
     try:
+        required_columns = ['date', 'Open', 'High', 'Low', 'Close', 'Volume']
+        if not all(col in df.columns for col in required_columns):
+            logger.error(f"Missing required columns for storage: {df.columns}")
+            return
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         for _, row in df.iterrows():
@@ -474,6 +488,9 @@ def update_data(batch_size: int = 100, max_entries: int = 200, historical_days: 
             rebuild_database()
             return
         
+        # Define required columns
+        required_columns = ['date', 'Open', 'High', 'Low', 'Close', 'Volume', 'company_name']
+        
         # Fetch and update data for each ticker
         for i in range(0, len(tickers), batch_size):
             batch = tickers[i:i + batch_size]
@@ -486,34 +503,48 @@ def update_data(batch_size: int = 100, max_entries: int = 200, historical_days: 
                 
                 # Fetch new data from yfinance
                 new_df = fetch_yfinance_data(ticker, start_date, end_date)
-                logger.info(f"Fetched {len(new_df)} rows for {ticker}, last date: {new_df['date'].iloc[-1] if not new_df.empty else 'empty'}")
+                logger.info(f"Fetched {len(new_df)} rows for {ticker}, last date: {new_df['date'].iloc[-1] if not new_df.empty else 'empty'}, columns: {list(new_df.columns) if not new_df.empty else 'empty'}")
+                
+                # Check if both DataFrames are empty
+                if historical_df.empty and new_df.empty:
+                    logger.warning(f"No data available for {ticker}, skipping")
+                    continue
+                
+                # Ensure consistent columns
+                if not historical_df.empty:
+                    historical_df = historical_df[required_columns]
+                if not new_df.empty:
+                    new_df = new_df[required_columns]
                 
                 # Combine historical and new data
-                if not historical_df.empty or not new_df.empty:
-                    combined_df = pd.concat([historical_df, new_df], ignore_index=True)
-                    combined_df = combined_df.drop_duplicates(subset=['date'], keep='last').sort_values('date')
-                    logger.info(f"Combined {len(combined_df)} rows for {ticker}, dates: {combined_df['date'].iloc[0] if not combined_df.empty else 'empty'} to {combined_df['date'].iloc[-1] if not combined_df.empty else 'empty'}")
-                    
-                    # Recalculate indicators if there's enough data
-                    if not combined_df.empty and len(combined_df) >= max(14 + 1, 14 + 3):
-                        try:
-                            adx, pdi, mdi = calculate_adx_dmi(combined_df)
-                            k, d = calculate_stochastic(combined_df)
-                            combined_df['adx'] = adx
-                            combined_df['pdi'] = pdi
-                            combined_df['mdi'] = mdi
-                            combined_df['k'] = k
-                            combined_df['d'] = d
-                        except Exception as e:
-                            logger.error(f"Indicator calculation failed for {ticker}: {e}")
-                            combined_df['adx'] = combined_df['pdi'] = combined_df['mdi'] = combined_df['k'] = combined_df['d'] = None
-                    
-                    # Store only the new data (from start_date onward)
-                    if not new_df.empty:
-                        update_df = combined_df[combined_df['date'] >= start_date]
-                        if not update_df.empty:
-                            store_stock_data(ticker, update_df)
-                            trim_excess_entries(ticker, max_entries)
+                combined_df = pd.concat([historical_df, new_df], ignore_index=True)
+                if combined_df.empty:
+                    logger.warning(f"Combined DataFrame is empty for {ticker}, skipping")
+                    continue
+                
+                combined_df = combined_df.drop_duplicates(subset=['date'], keep='last').sort_values('date')
+                logger.info(f"Combined {len(combined_df)} rows for {ticker}, dates: {combined_df['date'].iloc[0] if not combined_df.empty else 'empty'} to {combined_df['date'].iloc[-1] if not combined_df.empty else 'empty'}, columns: {list(combined_df.columns)}")
+                
+                # Recalculate indicators if there's enough data
+                if len(combined_df) >= max(14 + 1, 14 + 3):
+                    try:
+                        adx, pdi, mdi = calculate_adx_dmi(combined_df)
+                        k, d = calculate_stochastic(combined_df)
+                        combined_df['adx'] = adx
+                        combined_df['pdi'] = pdi
+                        combined_df['mdi'] = mdi
+                        combined_df['k'] = k
+                        combined_df['d'] = d
+                    except Exception as e:
+                        logger.error(f"Indicator calculation failed for {ticker}: {e}")
+                        combined_df['adx'] = combined_df['pdi'] = combined_df['mdi'] = combined_df['k'] = combined_df['d'] = None
+                
+                # Store only the new data (from start_date onward)
+                if not new_df.empty:
+                    update_df = combined_df[combined_df['date'] >= start_date]
+                    if not update_df.empty:
+                        store_stock_data(ticker, update_df)
+                        trim_excess_entries(ticker, max_entries)
                 time.sleep(0.2)
         
         # Delete data older than 180 days
