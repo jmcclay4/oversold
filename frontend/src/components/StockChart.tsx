@@ -71,7 +71,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: '%K',
         data: stockData.historicalK || [],
-        borderColor: '#ef4444',
+        borderColor: '#3b82f6',
         fill: false,
         yAxisID: 'y-stochastic',
         pointRadius: 0,
@@ -80,7 +80,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: '%D',
         data: stockData.historicalD || [],
-        borderColor: '#3b82f6',
+        borderColor: '#ef4444',
         fill: false,
         yAxisID: 'y-stochastic',
         pointRadius: 0,
