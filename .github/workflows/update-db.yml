@@ -8,20 +8,6 @@ jobs:
   update-db:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.13'
-
-    - name: Install dependencies
+    - name: Trigger database update
       run: |
-        cd backend
-        pip install -r requirements.txt
-
-    - name: Run database update
-      run: |
-        cd backend
-        python init_db.py
+        curl -X POST https://oversold-backend.fly.dev/update-db
