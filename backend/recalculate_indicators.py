@@ -27,17 +27,37 @@ def recalculate_indicators(ticker, date):
     })
     df = df.sort_values('date')
     try:
-        # Handle tuple or array output from calculate_adx_dmi and calculate_stochastic
+        # Handle output from calculate_adx_dmi and calculate_stochastic
         adx_dmi_result = calculate_adx_dmi(df)
         stochastic_result = calculate_stochastic(df)
-        # Convert to DataFrame if result is tuple or array
-        adx_dmi = adx_dmi_result[0] if isinstance(adx_dmi_result, tuple) else adx_dmi_result
-        stochastic = stochastic_result[0] if isinstance(stochastic_result, tuple) else stochastic_result
-        if isinstance(adx_dmi, np.ndarray):
-            adx_dmi = pd.DataFrame(adx_dmi, columns=['date', 'adx', 'pdi', 'mdi'])
-        if isinstance(stochastic, np.ndarray):
-            stochastic = pd.DataFrame(stochastic, columns=['date', 'k', 'd'])
-        # Check if results are valid DataFrames
+        # Assume calculate_adx_dmi returns tuple (adx, pdi, mdi) or array
+        if isinstance(adx_dmi_result, tuple):
+            adx, pdi, mdi = adx_dmi_result
+            adx_dmi = pd.DataFrame({
+                'date': df['date'],
+                'adx': adx,
+                'pdi': pdi,
+                'mdi': mdi
+            })
+        elif isinstance(adx_dmi_result, np.ndarray):
+            adx_dmi = pd.DataFrame(adx_dmi_result, columns=['adx', 'pdi', 'mdi'])
+            adx_dmi['date'] = df['date'].values
+        else:
+            adx_dmi = adx_dmi_result
+        # Assume calculate_stochastic returns tuple (k, d) or array
+        if isinstance(stochastic_result, tuple):
+            k, d = stochastic_result
+            stochastic = pd.DataFrame({
+                'date': df['date'],
+                'k': k,
+                'd': d
+            })
+        elif isinstance(stochastic_result, np.ndarray):
+            stochastic = pd.DataFrame(stochastic_result, columns=['k', 'd'])
+            stochastic['date'] = df['date'].values
+        else:
+            stochastic = stochastic_result
+        # Check if results are valid
         if adx_dmi is None or stochastic is None or adx_dmi.empty or stochastic.empty:
             logger.warning(f"Failed to calculate indicators for {ticker} on {date}")
             conn.close()
