@@ -359,7 +359,66 @@ def calculate_stochastic(df: pd.DataFrame, k_period: int = 14, d_period: int = 3
         logger.error(f"Error in Stochastic calculation: {e}")
         return np.array([None] * len(df)), np.array([None] * len(df))
 
+import yfinance as yf
+import pandas as pd
+from datetime import datetime, timedelta
+import pytz
+import time
+import logging
+
 def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataFrame:
+    if not isinstance(ticker, str):
+        logger.error(f"Invalid ticker type for {ticker}: expected str, got {type(ticker)}")
+        return pd.DataFrame()
+    retries = 5
+    delay = 2.0  # Increased delay for retries
+    cached_name = get_cached_company_name(ticker)
+    company_name = cached_name or f"{ticker} Inc."
+    # Adjust end_date based on market close (3 PM CDT)
+    current_time = datetime.now()
+    cdt_tz = pytz.timezone('America/Chicago')
+    current_cdt = current_time.astimezone(cdt_tz)
+    market_close = current_cdt.replace(hour=15, minute=0, second=0, microsecond=0)
+    today = current_cdt.strftime('%Y-%m-%d')
+    yesterday = (current_cdt - timedelta(days=1)).strftime('%Y-%m-%d')
+    fetch_end_date = today if current_cdt >= market_close else yesterday
+    logger.info(f"Current CDT: {current_cdt}, Market close: {market_close}, Fetch end_date: {fetch_end_date}")
+    for attempt in range(1, retries + 1):
+        try:
+            logger.info(f"Fetching yfinance data for {ticker}, attempt {attempt}, start: {start_date}, end: {fetch_end_date}")
+            stock = yf.Ticker(ticker.upper())
+            info = stock.info
+            if not info or 'symbol' not in info:
+                logger.warning(f"Ticker {ticker} may be delisted or invalid")
+                return pd.DataFrame()
+            df = stock.history(start=start_date, end=fetch_end_date, auto_adjust=True)
+            if df.empty:
+                logger.warning(f"No data found for {ticker} from {start_date} to {fetch_end_date}")
+                return pd.DataFrame()
+            df = df.reset_index()
+            df['date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
+            df = df[['date', 'Open', 'High', 'Low', 'Close', 'Volume']]
+            df = df.sort_values('date').drop_duplicates('date', keep='last')
+            logger.info(f"Fetched {len(df)} rows for {ticker}, dates: {df['date'].iloc[0]} to {df['date'].iloc[-1]}, columns: {list(df.columns)}")
+            if not cached_name:
+                company_name = info.get('longName', f"{ticker} Inc.")
+                store_company_name(ticker, company_name)
+            df['company_name'] = company_name
+            required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+            if not all(col in df.columns for col in required_columns) or df[required_columns].isnull().any().any():
+                logger.warning(f"Invalid or missing OHLCV data for {ticker}")
+                return pd.DataFrame()
+            if (df['Close'] <= 0).any() or (df['High'] <= df['Low']).any():
+                logger.warning(f"Suspicious OHLCV data for {ticker} (zero/negative close or high<=low)")
+                return pd.DataFrame()
+            return df
+        except Exception as e:
+            logger.error(f"Retry {attempt}/{retries} for {ticker}: {e}")
+            if attempt < retries:
+                time.sleep(delay * (2 ** attempt))
+            else:
+                logger.error(f"Failed to fetch data for {ticker}: {e}")
+                return pd.DataFrame()
     if not isinstance(ticker, str):
         logger.error(f"Invalid ticker type for {ticker}: expected str, got {type(ticker)}")
         return pd.DataFrame()
@@ -377,7 +436,7 @@ def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataF
     for attempt in range(1, retries + 1):
         try:
             logger.info(f"Fetching yfinance data for {ticker}, attempt {attempt}, start: {start_date}, end: {end_date}")
-            stock = yf.Ticker(ticker)
+            stock = yf.Ticker(ticker.upper())
             # Check if ticker is valid
             info = stock.info
             if not info or 'symbol' not in info:
