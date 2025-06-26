@@ -377,7 +377,7 @@ def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataF
     for attempt in range(1, retries + 1):
         try:
             logger.info(f"Fetching yfinance data for {ticker}, attempt {attempt}, start: {start_date}, end: {end_date}")
-            stock = yf.Ticker(ticker.upper())
+            stock = yf.Ticker(ticker)
             # Check if ticker is valid
             info = stock.info
             if not info or 'symbol' not in info:
