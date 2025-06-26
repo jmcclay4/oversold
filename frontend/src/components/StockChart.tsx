@@ -29,7 +29,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: 'Close Price',
         data: stockData.historicalClosePrices,
-        borderColor: '#3b82f6',
+        borderColor: '#f59e0b',
         fill: false,
         yAxisID: 'y-price',
         pointRadius: 0,
@@ -38,7 +38,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: 'ADX',
         data: stockData.historicalAdx || [],
-        borderColor: '#22c55e',
+        borderColor: '#a855f7',
         fill: false,
         yAxisID: 'y-indicators',
         pointRadius: 0,
@@ -47,7 +47,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: '+DI',
         data: stockData.historicalPdi || [],
-        borderColor: '#ef4444',
+        borderColor: '#3b82f6',
         fill: false,
         yAxisID: 'y-indicators',
         pointRadius: 0,
@@ -56,7 +56,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: '-DI',
         data: stockData.historicalMdi || [],
-        borderColor: '#a855f7',
+        borderColor: '#ef4444',
         fill: false,
         yAxisID: 'y-indicators',
         pointRadius: 0,
@@ -71,7 +71,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: '%K',
         data: stockData.historicalK || [],
-        borderColor: '#f59e0b',
+        borderColor: '#ef4444',
         fill: false,
         yAxisID: 'y-stochastic',
         pointRadius: 0,
@@ -80,7 +80,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: '%D',
         data: stockData.historicalD || [],
-        borderColor: '#10b981',
+        borderColor: '#3b82f6',
         fill: false,
         yAxisID: 'y-stochastic',
         pointRadius: 0,
