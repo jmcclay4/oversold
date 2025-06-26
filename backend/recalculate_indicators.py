@@ -1,5 +1,6 @@
 import sqlite3
 import pandas as pd
+import numpy as np
 import logging
 from init_db import calculate_adx_dmi, calculate_stochastic
 
@@ -21,23 +22,22 @@ def recalculate_indicators(ticker, date):
         logger.warning(f"Insufficient data for {ticker} on {date}: {len(df)} rows")
         conn.close()
         return
-    # Rename columns to match yfinance conventions
     df = df.rename(columns={
-        'open': 'Open',
-        'high': 'High',
-        'low': 'Low',
-        'close': 'Close',
-        'volume': 'Volume',
-        'company_name': 'company_name'
+        'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'
     })
     df = df.sort_values('date')
     try:
-        # Handle tuple output from calculate_adx_dmi and calculate_stochastic
+        # Handle tuple or array output from calculate_adx_dmi and calculate_stochastic
         adx_dmi_result = calculate_adx_dmi(df)
         stochastic_result = calculate_stochastic(df)
-        # Assume functions return (DataFrame, ...) or DataFrame
+        # Convert to DataFrame if result is tuple or array
         adx_dmi = adx_dmi_result[0] if isinstance(adx_dmi_result, tuple) else adx_dmi_result
         stochastic = stochastic_result[0] if isinstance(stochastic_result, tuple) else stochastic_result
+        if isinstance(adx_dmi, np.ndarray):
+            adx_dmi = pd.DataFrame(adx_dmi, columns=['date', 'adx', 'pdi', 'mdi'])
+        if isinstance(stochastic, np.ndarray):
+            stochastic = pd.DataFrame(stochastic, columns=['date', 'k', 'd'])
+        # Check if results are valid DataFrames
         if adx_dmi is None or stochastic is None or adx_dmi.empty or stochastic.empty:
             logger.warning(f"Failed to calculate indicators for {ticker} on {date}")
             conn.close()
