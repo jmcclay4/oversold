@@ -2,7 +2,7 @@ import sqlite3
 import pandas as pd
 import numpy as np
 import logging
-from init_db import calculate_adx_dmi, calculate_stochastic
+from init_db import calculate_adx_dmi, calculate_stochastic, SP500_TICKERS
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -27,10 +27,8 @@ def recalculate_indicators(ticker, date):
     })
     df = df.sort_values('date')
     try:
-        # Handle output from calculate_adx_dmi and calculate_stochastic
         adx_dmi_result = calculate_adx_dmi(df)
         stochastic_result = calculate_stochastic(df)
-        # Assume calculate_adx_dmi returns tuple (adx, pdi, mdi) or array
         if isinstance(adx_dmi_result, tuple):
             adx, pdi, mdi = adx_dmi_result
             adx_dmi = pd.DataFrame({
@@ -44,7 +42,6 @@ def recalculate_indicators(ticker, date):
             adx_dmi['date'] = df['date'].values
         else:
             adx_dmi = adx_dmi_result
-        # Assume calculate_stochastic returns tuple (k, d) or array
         if isinstance(stochastic_result, tuple):
             k, d = stochastic_result
             stochastic = pd.DataFrame({
@@ -57,7 +54,6 @@ def recalculate_indicators(ticker, date):
             stochastic['date'] = df['date'].values
         else:
             stochastic = stochastic_result
-        # Check if results are valid
         if adx_dmi is None or stochastic is None or adx_dmi.empty or stochastic.empty:
             logger.warning(f"Failed to calculate indicators for {ticker} on {date}")
             conn.close()
@@ -86,4 +82,7 @@ def recalculate_indicators(ticker, date):
     conn.close()
 
 if __name__ == "__main__":
-    recalculate_indicators('A', '2025-06-23')
+    target_date = '2025-06-23'
+    for ticker in SP500_TICKERS:
+        logger.info(f"Processing ticker {ticker}")
+        recalculate_indicators(ticker, target_date)
