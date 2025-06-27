@@ -1,4 +1,4 @@
-import { OHLCV, StockAnalysisResult, IndicatorValues, BatchStockDataResponse } from '../types';
+import { OHLCV, StockAnalysisResult, IndicatorValues, BatchStockDataResponse, LivePrice } from '../types';
 import { ADX_TREND_STRENGTH_THRESHOLD, DMI_CROSSOVER_PROXIMITY_PERCENTAGE } from '../constants';
 
 const API_BASE_URL = 'https://oversold-backend.fly.dev';
@@ -89,19 +89,18 @@ export const fetchMetadata = async (): Promise<{ last_ohlcv_update: string | nul
   }
 };
 
-export const fetchLivePrices = async (tickers: string[]): Promise<{ ticker: string, price: number, timestamp: string }[]> => {
-  console.log(`Fetching live prices for ${tickers.length} tickers`);
+export const fetchLivePrices = async (tickers: string[]): Promise<LivePrice[]> => {
   try {
-    const response = await fetch(`${API_BASE_URL}/live-prices?tickers=${tickers.join(',')}&batch_size=100`);
+    const tickerStr = tickers.join(',');
+    const response = await fetch(`https://oversold-backend.fly.dev/live-prices?tickers=${tickerStr}`);
     if (!response.ok) {
-      throw new Error(`HTTP error ${response.status}`);
+      throw new Error(`HTTP error! status: ${response.status}`);
     }
-    const data: { ticker: string, price: number, timestamp: string }[] = await response.json();
-    console.log(`Received live prices for ${data.length} tickers`);
+    const data = await response.json();
     return data;
-  } catch (err) {
-    console.error('Live prices fetch error:', err);
-    return [];
+  } catch (error) {
+    console.error('Error fetching live prices:', error);
+    throw error;
   }
 };
 

@@ -5,51 +5,48 @@ export interface OHLCV {
   low: number;
   close: number;
   volume: number;
-  companyName?: string;
-  adx: number | null;
-  pdi: number | null;
-  mdi: number | null;
-  k: number | null;
-  d: number | null;
+  company_name?: string;
+  adx?: number;
+  pdi?: number;
+  mdi?: number;
+  k?: number;
+  d?: number;
 }
 
-export interface IndicatorValues {
-  adx: number | null;
-  pdi: number | null;
-  mdi: number | null;
-  k: number | null;
-  d: number | null;
+export interface Indicators {
+  adx?: number;
+  pdi?: number;
+  mdi?: number;
+  k?: number;
+  d?: number;
 }
 
 export interface StockAnalysisResult {
   ticker: string;
-  companyName: string;
-  latestPrice?: number;
-  livePrice?: number; 
-  percentChange?: number;
+  companyName?: string;
   latestOhlcvDataPoint?: OHLCV;
-  latestIndicators?: IndicatorValues;
-  previousIndicators?: IndicatorValues;
-  historicalDates?: string[];
-  historicalClosePrices?: number[];
-  historicalAdx?: (number | null)[];
-  historicalPdi?: (number | null)[];
-  historicalMdi?: (number | null)[];
-  historicalK?: (number | null)[];
-  historicalD?: (number | null)[];
-  ohlcv: OHLCV[];
-  statusTags: string[];
-  meetsCriteria: boolean;
-  message: string;
+  latestPrice?: number;
+  percentChange?: number;
+  latestIndicators?: Indicators;
   error?: string;
-}
-
-export interface BatchStockDataResponse {
-  ticker: string;
-  company_name: string | null;
-  latest_ohlcv: OHLCV | null;
+  statusTags: string[];
 }
 
 export interface FilterCriteria {
   searchTerm?: string;
+}
+
+export interface LivePrice {
+  ticker: string;
+  price: number;
+  timestamp: string;
+}
+
+export interface StockAnalysisTableProps {
+  results: StockAnalysisResult[];
+  favoriteTickers: Set<string>;
+  onToggleFavorite: (ticker: string) => void;
+  onRowClick: (ticker: string) => void;
+  selectedTickerForChart: string | null;
+  livePrices: Record<string, LivePrice>;
 }

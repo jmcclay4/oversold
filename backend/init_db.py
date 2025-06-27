@@ -15,7 +15,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 DB_PATH = "/data/stocks.db"
-ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY", "YOUR_API_KEY")
+ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "YOUR_ALPACA_KEY")
+ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "YOUR_ALPACA_SECRET")
+ALPACA_BASE_URL = "https://data.alpaca.markets/v2"
 
 def wilders_smoothing(data: np.ndarray, period: int) -> np.ndarray:
     smoothed = np.array([None] * len(data), dtype=float)
@@ -901,40 +903,41 @@ def delete_old_data(max_age_days: int = 180):
     finally:
         conn.close()
 
-def fetch_live_prices(tickers: List[str], batch_size: int = 5) -> pd.DataFrame:
-    logger.info(f"Fetching live prices for {len(tickers)} tickers")
-    if not ALPHA_VANTAGE_API_KEY or ALPHA_VANTAGE_API_KEY == "YOUR_API_KEY":
-        logger.error("Alpha Vantage API key is not set or invalid")
+def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
+    logger.info(f"Fetching live prices for {len(tickers)} favorited tickers")
+    if not ALPACA_API_KEY or not ALPACA_SECRET_KEY or "YOUR_ALPACA" in [ALPACA_API_KEY, ALPACA_SECRET_KEY]:
+        logger.error("Alpaca API key or secret is not set or invalid")
         return pd.DataFrame()
     try:
         cdt_tz = pytz.timezone('America/Chicago')
         timestamp = datetime.now(cdt_tz).strftime("%m/%d %H:%M")
+        headers = {
+            "APCA-API-KEY-ID": ALPACA_API_KEY,
+            "APCA-API-SECRET-KEY": ALPACA_SECRET_KEY
+        }
+        ticker_str = ",".join(tickers)
+        url = f"{ALPACA_BASE_URL}/stocks/quotes/latest?symbols={ticker_str}&feed=iex"
+        logger.info(f"Requesting Alpaca URL: {url}")
+        response = requests.get(url, headers=headers, timeout=10)
+        logger.info(f"Alpaca response status: {response.status_code}")
+        logger.debug(f"Alpaca response: {response.text}")
+        response.raise_for_status()
+        data = response.json()
+        if "quotes" not in data:
+            logger.error(f"No 'quotes' in response: {data}")
+            return pd.DataFrame()
         result = []
-        for i in range(0, len(tickers), batch_size):
-            batch = tickers[i:i + batch_size]
-            for ticker in batch:
-                url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={ticker}&apikey={ALPHA_VANTAGE_API_KEY}"
-                logger.info(f"Requesting Alpha Vantage URL: {url}")
-                response = requests.get(url, timeout=10)
-                logger.info(f"Alpha Vantage response status: {response.status_code}")
-                logger.debug(f"Alpha Vantage response: {response.text}")
-                response.raise_for_status()
-                data = response.json()
-                if "Global Quote" not in data:
-                    logger.error(f"No 'Global Quote' in response for {ticker}: {data}")
-                    continue
-                quote = data["Global Quote"]
-                price = quote.get("05. price")
-                if price:
-                    try:
-                        result.append({
-                            "ticker": ticker,
-                            "price": float(price),
-                            "timestamp": timestamp
-                        })
-                    except ValueError as e:
-                        logger.error(f"Invalid price for {ticker}: {price}, error: {e}")
-                time.sleep(12)  # 5 calls/minute = ~12s per call
+        for ticker in tickers:
+            quote = data["quotes"].get(ticker)
+            if quote and quote.get("ap"):  # Use ask price (ap) for quote
+                try:
+                    result.append({
+                        "ticker": ticker,
+                        "price": float(quote["ap"]),
+                        "timestamp": timestamp
+                    })
+                except ValueError as e:
+                    logger.error(f"Invalid price for {ticker}: {quote['ap']}, error: {e}")
         df = pd.DataFrame(result)
         logger.info(f"Fetched live prices for {len(df)} tickers")
         return df

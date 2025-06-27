@@ -251,12 +251,15 @@ async def rebuild_database_endpoint():
         raise HTTPException(status_code=500, detail=f"Failed to rebuild database: {str(e)}")
     
 @app.get("/live-prices", response_model=List[LivePriceResponse])
-async def get_live_prices(tickers: Optional[str] = None, batch_size: int = 100):
-    logger.info(f"Received request for live prices, tickers: {tickers or 'all'}")
+async def get_live_prices(tickers: Optional[str] = None):
+    logger.info(f"Received request for live prices, tickers: {tickers or 'none'}")
+    if not tickers:
+        raise HTTPException(status_code=400, detail="No tickers provided")
     try:
-        ticker_list = tickers.split(",") if tickers else SP500_TICKERS
-        ticker_list = [t.upper() for t in ticker_list if t.upper() in SP500_TICKERS]
-        df = fetch_live_prices(ticker_list, batch_size)
+        ticker_list = [t.upper() for t in tickers.split(",") if t.upper() in SP500_TICKERS]
+        if not ticker_list:
+            raise HTTPException(status_code=400, detail="No valid tickers provided")
+        df = fetch_live_prices(ticker_list)
         if df.empty:
             raise HTTPException(status_code=500, detail="No live price data available")
         results = [
