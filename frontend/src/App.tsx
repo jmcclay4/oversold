@@ -3,7 +3,7 @@ import { StockAnalysisTable } from './components/StockAnalysisTable';
 import { StockChart } from './components/StockChart';
 import { LoadingSpinner } from './components/LoadingSpinner';
 import { ErrorMessage } from './components/ErrorMessage';
-import { analyzeTrackedStocks, fetchAllTickers, fetchMetadata, analyzeStockTicker } from './services/stockDataService';
+import { analyzeTrackedStocks, fetchAllTickers, fetchMetadata, analyzeStockTicker, fetchLivePrices } from './services/stockDataService';
 import { StockAnalysisResult, FilterCriteria } from './types';
 
 const App: React.FC = () => {
@@ -19,6 +19,7 @@ const App: React.FC = () => {
   const [showMenu, setShowMenu] = useState(false);
   const [newTicker, setNewTicker] = useState('');
   const [lastOhlcvUpdate, setLastOhlcvUpdate] = useState<string | null>(null);
+  const [livePriceUpdate, setLivePriceUpdate] = useState<string | null>(null);
 
   useEffect(() => {
     console.log('Loading stored favorites and custom tickers...');
@@ -59,7 +60,6 @@ const App: React.FC = () => {
       const stockData = await analyzeStockTicker(ticker);
       if (!stockData.error) {
         setAllAnalysisResults(prev => {
-          // Only update the selected ticker
           const updated = prev.map(r => r.ticker === ticker ? stockData : r);
           return updated;
         });
@@ -112,6 +112,11 @@ const App: React.FC = () => {
       setAllAnalysisResults(results);
       const metadata = await fetchMetadata();
       setLastOhlcvUpdate(metadata.last_ohlcv_update || 'Unknown');
+      // Fetch initial live prices
+      const livePrices = await fetchLivePrices(tickers.slice(0, 100));
+      if (livePrices.length > 0) {
+        setLivePriceUpdate(livePrices[0].timestamp);
+      }
     } catch (error) {
       const errMsg = `Error analyzing stocks: ${(error as Error).message}`;
       console.error(errMsg);
@@ -170,6 +175,7 @@ const App: React.FC = () => {
         </h1>
         <div className="text-right text-xs text-slate-500">
           <p>OHLCV Data: {lastOhlcvUpdate || '...'}</p>
+          <p>Live Price: {livePriceUpdate || '...'}</p>
         </div>
       </header>
 
@@ -259,7 +265,7 @@ const App: React.FC = () => {
           OVERSOLD Dashboard. For educational purposes. Not financial advice.
         </p>
         <p className="text-xs text-gray-500 mt-1">
-          Backend database integration required for live data.
+          Data provided by Alpha Vantage.
         </p>
       </footer>
     </div>

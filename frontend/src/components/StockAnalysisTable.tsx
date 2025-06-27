@@ -49,7 +49,6 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
   selectedTickerForChart
 }) => {
   const [livePrices, setLivePrices] = useState<{ [ticker: string]: { price: number, timestamp: string } }>({});
-  const [lastUpdate, setLastUpdate] = useState<string | null>(null);
   const [loadedTickers, setLoadedTickers] = useState<string[]>([]);
   const [hasMore, setHasMore] = useState<boolean>(true);
   const tableRef = useRef<HTMLDivElement>(null);
@@ -62,9 +61,6 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
         return acc;
       }, {});
       setLivePrices(prev => (reset ? prices : { ...prev, ...prices }));
-      if (data.length > 0) {
-        setLastUpdate(data[0].timestamp);
-      }
       return data.length;
     } catch (error) {
       console.error('Error fetching live prices:', error);
@@ -129,24 +125,26 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
 
   return (
     <div className="bg-slate-800 shadow-2xl rounded-xl overflow-hidden mt-6">
-      <div className="flex justify-end mb-2 px-3 py-2">
-        <span className="text-xs text-slate-400">Live Price: {lastUpdate || '-'}</span>
-      </div>
       <div className="overflow-x-auto max-h-[60vh]">
         <table className="min-w-full divide-y divide-slate-700">
           <thead className="bg-slate-900">
             <tr>
-              <th scope="col" className={`${headerCellClass} text-center`}>
-                <button
-                  onClick={() => fetchLivePricesBatch(results.map(r => r.ticker), true)}
-                  className="px-2 py-1 bg-blue-600 hover:bg-blue-700 rounded-lg text-white text-xs"
-                >
-                  Refresh
-                </button>
-              </th>
               <th scope="col" className={`${headerCellClass} text-center`}>Fav</th>
               <th scope="col" className={headerCellClass}>Ticker</th>
-              <th scope="col" className={headerCellClass}>Price</th>
+              <th scope="col" className={headerCellClass}>
+                <div className="flex items-center">
+                  Price
+                  <button
+                    onClick={() => fetchLivePricesBatch(results.map(r => r.ticker), true)}
+                    className="ml-2 p-1 bg-slate-900 hover:bg-slate-700 rounded-full text-white text-xs"
+                    aria-label="Refresh live prices"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h5m-5 0a9 9 0 1114 0v-5h-5" />
+                    </svg>
+                  </button>
+                </div>
+              </th>
               <th scope="col" className={headerCellClass}>Close</th>
               <th scope="col" className={headerCellClass}>∆</th>
               <th scope="col" className={headerCellClass}>ADX</th>
@@ -199,7 +197,7 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
                   {result.latestIndicators?.adx != null ? result.latestIndicators.adx.toFixed(2) : 'N/A'}
                 </td>
                 <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-300">
-                  {result.latestIndicators?.pdi != null ? result.latestIndicators.pdi.toFixed(2) : 'N/A'}
+                  {result.latestIndicators?.pdi != null ? result.latest Indicators.pdi.toFixed(2) : 'N/A'}
                 </td>
                 <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-300">
                   {result.latestIndicators?.mdi != null ? result.latestIndicators.mdi.toFixed(2) : 'N/A'}

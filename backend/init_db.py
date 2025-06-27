@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 DB_PATH = "/data/stocks.db"
-IEX_API_KEY = "" # IEX Cloud API Key
+ALPHA_VANTAGE_API_KEY = "T9YOQWD20T259F4I" # API Key
 
 def wilders_smoothing(data: np.ndarray, period: int) -> np.ndarray:
     smoothed = np.array([None] * len(data), dtype=float)
@@ -923,20 +923,19 @@ def fetch_live_prices(tickers: List[str], batch_size: int = 100) -> pd.DataFrame
         for i in range(0, len(tickers), batch_size):
             batch = tickers[i:i + batch_size]
             ticker_str = ",".join(batch)
-            url = f"https://cloud.iexapis.com/stable/stock/market/batch?symbols={ticker_str}&types=quote&token={IEX_API_KEY}"
+            url = f"https://www.alphavantage.co/query?function=BATCH_STOCK_QUOTES&symbols={ticker_str}&apikey={ALPHA_VANTAGE_API_KEY}"
             response = requests.get(url)
             response.raise_for_status()
-            data = response.json()
-            for ticker in batch:
-                if ticker in data and "quote" in data[ticker]:
-                    quote = data[ticker]["quote"]
+            data = response.json().get("Stock Quotes", [])
+            for quote in data:
+                ticker = quote["1. symbol"]
+                if ticker in batch:
                     result.append({
                         "ticker": ticker,
-                        "price": float(quote["latestPrice"]),
-                        "previous_close": float(quote["previousClose"]),
+                        "price": float(quote["2. price"]),
                         "timestamp": timestamp
                     })
-            time.sleep(1)  # Respect IEX Cloud rate limit
+            time.sleep(12)  # Alpha Vantage: 5 calls/minute (12s delay)
         df = pd.DataFrame(result)
         logger.info(f"Fetched live prices for {len(df)} tickers")
         return df

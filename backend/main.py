@@ -263,7 +263,6 @@ async def get_live_prices(tickers: Optional[str] = None, batch_size: int = 100):
             LivePriceResponse(
                 ticker=row["ticker"],
                 price=row["price"],
-                previous_close=row["previous_close"],
                 timestamp=row["timestamp"]
             )
             for _, row in df.iterrows()
