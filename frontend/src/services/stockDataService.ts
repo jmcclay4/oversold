@@ -2,7 +2,6 @@ import { OHLCV, StockAnalysisResult, IndicatorValues, BatchStockDataResponse, Li
 import { ADX_TREND_STRENGTH_THRESHOLD, DMI_CROSSOVER_PROXIMITY_PERCENTAGE } from '../constants';
 
 const API_BASE_URL = 'https://oversold-backend.fly.dev';
-const BATCH_SIZE = 50;
 
 const fetchStockData = async (ticker: string): Promise<OHLCV[]> => {
   try {
@@ -90,17 +89,22 @@ export const fetchMetadata = async (): Promise<{ last_ohlcv_update: string | nul
 };
 
 export const fetchLivePrices = async (tickers: string[]): Promise<LivePrice[]> => {
+  console.log(`Fetching live prices for ${tickers.length} tickers`);
+  if (tickers.length > 10) {
+    tickers = tickers.slice(0, 10);
+    console.log(`Limiting to 10 tickers: ${tickers}`);
+  }
   try {
-    const tickerStr = tickers.join(',');
-    const response = await fetch(`https://oversold-backend.fly.dev/live-prices?tickers=${tickerStr}`);
+    const response = await fetch(`${API_BASE_URL}/live-prices?tickers=${tickers.join(',')}`);
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      throw new Error(`HTTP error ${response.status}`);
     }
-    const data = await response.json();
+    const data: LivePrice[] = await response.json();
+    console.log(`Received live prices for ${data.length} tickers`);
     return data;
-  } catch (error) {
-    console.error('Error fetching live prices:', error);
-    throw error;
+  } catch (err) {
+    console.error('Live prices fetch error:', err);
+    return [];
   }
 };
 
@@ -246,6 +250,7 @@ export const analyzeStockTicker = async (ticker: string): Promise<StockAnalysisR
 };
 
 export const analyzeTrackedStocks = async (tickers: string[]): Promise<StockAnalysisResult[]> => {
+  const BATCH_SIZE = 50;
   const results: StockAnalysisResult[] = [];
   const batches = [];
   for (let i = 0; i < tickers.length; i += BATCH_SIZE) {
@@ -311,11 +316,11 @@ export const analyzeTrackedStocks = async (tickers: string[]): Promise<StockAnal
           ticker,
           companyName: stock.company_name || `${ticker} Inc.`,
           latestPrice: latestOhlcv.close,
-          percentChange: undefined, // Calculate on client-side if needed
+          percentChange: undefined,
           latestOhlcvDataPoint: latestOhlcv,
           latestIndicators,
           previousIndicators: undefined,
-          historicalDates: [], // Empty for table data
+          historicalDates: [],
           historicalClosePrices: [],
           historicalAdx: [],
           historicalPdi: [],

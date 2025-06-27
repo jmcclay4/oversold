@@ -4,7 +4,6 @@ import pandas as pd
 from datetime import datetime, timedelta
 import numpy as np
 import logging
-import os
 import time
 import requests
 from typing import List, Optional
@@ -15,8 +14,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 DB_PATH = "/data/stocks.db"
-ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "YOUR_ALPACA_KEY")
-ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "YOUR_ALPACA_SECRET")
+ALPACA_API_KEY = "PKB8ZTJLFRSW93Z5IDI7"
+ALPACA_SECRET_KEY = "gO6TAmXeYtVSag3lXGaSVwvaLzShax13dKDcTguf"
 ALPACA_BASE_URL = "https://data.alpaca.markets/v2"
 
 def wilders_smoothing(data: np.ndarray, period: int) -> np.ndarray:
@@ -84,12 +83,18 @@ def init_db():
             VALUES ('last_ohlcv_update', ?)
         """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
         conn.commit()
-        logger.info(f"Database initialized at {DB_PATH}")
+        cursor.execute("SELECT DISTINCT ticker FROM ohlcv")
+        existing_tickers = [row[0] for row in cursor.fetchall()]
+        missing_tickers = [t for t in SP500_TICKERS if t not in existing_tickers and isinstance(t, str)]
+        if missing_tickers:
+            logger.info(f"Found {len(missing_tickers)} missing tickers, updating database")
+            update_data(missing_tickers)
+        else:
+            logger.info("Database is up-to-date")
+        conn.close()
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
         raise
-    finally:
-        conn.close()
 
 def rebuild_database():
     logger.info("Starting database rebuild")
@@ -256,7 +261,7 @@ def get_historical_data(ticker: str, days: int = 30) -> pd.DataFrame:
         """
         df = pd.read_sql_query(query, conn, params=(ticker, days))
         df = df.rename(columns={'date': 'date', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'})
-        df = df.sort_values('date')  # Sort ascending for indicator calculations
+        df = df.sort_values('date')
         logger.info(f"Retrieved {len(df)} rows of historical data for {ticker}, columns: {list(df.columns)}")
         return df
     except Exception as e:
@@ -368,71 +373,15 @@ def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataF
         logger.error(f"Invalid ticker type for {ticker}: expected str, got {type(ticker)}")
         return pd.DataFrame()
     retries = 5
-    delay = 2.0
-    timeout = 10.0
+    delay = 1.0
     cached_name = get_cached_company_name(ticker)
     company_name = cached_name or f"{ticker} Inc."
     cdt_tz = pytz.timezone('America/Chicago')
     current_cdt = datetime.now().astimezone(cdt_tz)
     market_close = current_cdt.replace(hour=15, minute=0, second=0, microsecond=0)
-    yesterday = (current_cdt - timedelta(days=1)).strftime('%Y-%m-%d')
-    today = current_cdt.strftime('%Y-%m-%d')
-    # Set fetch_end_date to next day or today post-market close
-    start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-    fetch_end_date = (start_dt + timedelta(days=1)).strftime('%Y-%m-%d') if current_cdt < market_close else today
-    logger.info(f"Current CDT: {current_cdt}, Market close: {market_close}, Start: {start_date}, Fetch end_date: {fetch_end_date}")
-    for attempt in range(1, retries + 1):
-        try:
-            logger.info(f"Fetching yfinance data for {ticker}, attempt {attempt}, start: {start_date}, end: {fetch_end_date}")
-            stock = yf.Ticker(ticker.upper())
-            info = stock.info
-            if not info or 'symbol' not in info:
-                logger.warning(f"Ticker {ticker} may be delisted or invalid")
-                return pd.DataFrame()
-            df = stock.history(start=start_date, end=fetch_end_date, auto_adjust=True, timeout=timeout)
-            if df.empty:
-                logger.warning(f"No data found for {ticker} from {start_date} to {fetch_end_date}")
-                return pd.DataFrame()
-            df = df.reset_index()
-            df['date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
-            df = df[['date', 'Open', 'High', 'Low', 'Close', 'Volume']]
-            df = df.sort_values('date').drop_duplicates('date', keep='last')
-            logger.info(f"Fetched {len(df)} rows for {ticker}, dates: {df['date'].iloc[0]} to {df['date'].iloc[-1]}, columns: {list(df.columns)}")
-            if not cached_name:
-                company_name = info.get('longName', f"{ticker} Inc.")
-                store_company_name(ticker, company_name)
-            df['company_name'] = company_name
-            required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-            if not all(col in df.columns for col in required_columns) or df[required_columns].isnull().any().any():
-                logger.warning(f"Invalid or missing OHLCV data for {ticker}")
-                return pd.DataFrame()
-            if (df['Close'] <= 0).any() or (df['High'] <= df['Low']).any():
-                logger.warning(f"Suspicious OHLCV data for {ticker} (zero/negative close or high<=low)")
-                return pd.DataFrame()
-            return df
-        except Exception as e:
-            logger.error(f"Retry {attempt}/{retries} for {ticker}: {e}")
-            if attempt < retries:
-                time.sleep(delay * (2 ** attempt))
-            else:
-                logger.error(f"Failed to fetch data for {ticker}: {e}")
-                return pd.DataFrame()
-    if not isinstance(ticker, str):
-        logger.error(f"Invalid ticker type for {ticker}: expected str, got {type(ticker)}")
-        return pd.DataFrame()
-    retries = 5
-    delay = 2.0  # Increased delay for retries
-    cached_name = get_cached_company_name(ticker)
-    company_name = cached_name or f"{ticker} Inc."
-    # Adjust end_date based on market close (3 PM CDT)
-    current_time = datetime.now()
-    cdt_tz = pytz.timezone('America/Chicago')
-    current_cdt = current_time.astimezone(cdt_tz)
-    market_close = current_cdt.replace(hour=15, minute=0, second=0, microsecond=0)
     today = current_cdt.strftime('%Y-%m-%d')
     yesterday = (current_cdt - timedelta(days=1)).strftime('%Y-%m-%d')
     fetch_end_date = today if current_cdt >= market_close else yesterday
-    logger.info(f"Current CDT: {current_cdt}, Market close: {market_close}, Fetch end_date: {fetch_end_date}")
     for attempt in range(1, retries + 1):
         try:
             logger.info(f"Fetching yfinance data for {ticker}, attempt {attempt}, start: {start_date}, end: {fetch_end_date}")
@@ -469,56 +418,6 @@ def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataF
             else:
                 logger.error(f"Failed to fetch data for {ticker}: {e}")
                 return pd.DataFrame()
-    if not isinstance(ticker, str):
-        logger.error(f"Invalid ticker type for {ticker}: expected str, got {type(ticker)}")
-        return pd.DataFrame()
-    retries = 5
-    delay = 1.0
-    cached_name = get_cached_company_name(ticker)
-    company_name = cached_name or f"{ticker} Inc."
-    # Adjust end_date to today if after market close (3 PM CDT)
-    current_time = datetime.now()
-    cdt_tz = pytz.timezone('America/Chicago')
-    current_cdt = current_time.astimezone(cdt_tz)
-    market_close = current_cdt.replace(hour=15, minute=0, second=0, microsecond=0)
-    if current_cdt >= market_close:
-        end_date = current_cdt.strftime('%Y-%m-%d')
-    for attempt in range(1, retries + 1):
-        try:
-            logger.info(f"Fetching yfinance data for {ticker}, attempt {attempt}, start: {start_date}, end: {end_date}")
-            stock = yf.Ticker(ticker.upper())
-            # Check if ticker is valid
-            info = stock.info
-            if not info or 'symbol' not in info:
-                logger.warning(f"Ticker {ticker} may be delisted or invalid")
-                return pd.DataFrame()
-            df = stock.history(start=start_date, end=end_date, auto_adjust=True)
-            if df.empty:
-                logger.warning(f"No data found for {ticker}")
-                return pd.DataFrame()
-            df = df.reset_index()
-            df['date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
-            df = df[['date', 'Open', 'High', 'Low', 'Close', 'Volume']]
-            df = df.sort_values('date').drop_duplicates('date', keep='last')
-            logger.info(f"Fetched {len(df)} rows for {ticker}, dates: {df['date'].iloc[0]} to {df['date'].iloc[-1]}, columns: {list(df.columns)}")
-            if not cached_name:
-                company_name = info.get('longName', f"{ticker} Inc.")
-                store_company_name(ticker, company_name)
-            df['company_name'] = company_name
-            required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-            if not all(col in df.columns for col in required_columns) or df[required_columns].isnull().any().any():
-                logger.warning(f"Invalid or missing OHLCV data for {ticker}")
-                return pd.DataFrame()
-            if (df['Close'] <= 0).any() or (df['High'] <= df['Low']).any():
-                logger.warning(f"Suspicious OHLCV data for {ticker} (zero/negative close or high<=low)")
-                return pd.DataFrame()
-            return df
-        except Exception as e:
-            logger.error(f"Retry {attempt}/{retries} for {ticker}: {e}")
-            if attempt < retries:
-                time.sleep(delay * (2 ** attempt))
-            else:
-                logger.error(f"Failed to fetch data for {ticker}: {e}")
 
 def store_stock_data(ticker: str, df: pd.DataFrame):
     if df.empty:
@@ -558,337 +457,49 @@ def store_stock_data(ticker: str, df: pd.DataFrame):
     finally:
         conn.close()
 
-def update_data():
+def update_data(tickers: List[str] = None):
     logger.info("Starting data update")
-    conn = sqlite3.connect(DB_PATH)
-    tickers = SP500_TICKERS
-    latest_db_date = get_latest_db_date()
-    start_date = (datetime.strptime(latest_db_date, '%Y-%m-%d') - timedelta(days=2)).strftime('%Y-%m-%d')
-    end_date = datetime.now().strftime('%Y-%m-%d')
-    for ticker in tickers:
-        logger.info(f"Processing {ticker}")
-        df = fetch_yfinance_data(ticker, start_date, end_date)
-        if not df.empty:
-            df = df.rename(columns={
-                'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'
-            })
-            store_data(ticker, df, conn)
-        time.sleep(0.5)
-    delete_old_data(max_age_days=180)
-    conn.commit()
-    conn.close()
-    logger.info("Data update completed")
-    logger.info("Updating stock data")
     try:
-        # Get the latest date in the database
+        conn = sqlite3.connect(DB_PATH)
+        tickers = tickers or get_all_tickers()
         latest_db_date = get_latest_db_date()
         current_date = datetime.now().date()
-        end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')  # Yesterday
-        if not latest_db_date:
-            logger.warning("No data in database, triggering full rebuild")
-            rebuild_database()
-            return
-        
-        # Check if data is stale (not same as current date)
-        latest_db_datetime = pd.to_datetime(latest_db_date).date()
-        logger.info(f"Latest database date: {latest_db_date}, current date: {current_date}")
-        if latest_db_datetime >= current_date:
-            logger.info("Database is up-to-date (same as or newer than current date), no update needed")
-            return
-        
-        # Generate list of missing dates
-        missing_dates = []
-        current = latest_db_datetime + timedelta(days=1)
-        while current <= current_date - timedelta(days=1):
-            missing_dates.append(current.strftime('%Y-%m-%d'))
-            current += timedelta(days=1)
-        logger.info(f"Missing dates to fetch: {missing_dates}")
-        
-        # Verify ticker consistency
-        tickers = get_all_tickers()
-        logger.info(f"Processing {len(tickers)} tickers from database")
-        inconsistent_tickers = []
-        for ticker in tickers:
-            ticker_latest_date = get_latest_date(ticker)
-            if ticker_latest_date != latest_db_date:
-                inconsistent_tickers.append((ticker, ticker_latest_date))
-        if inconsistent_tickers:
-            logger.warning(f"Inconsistent latest dates detected: {inconsistent_tickers}")
-            logger.info("Triggering full rebuild to ensure consistency")
-            rebuild_database()
-            return
-        
-        # Define required columns
-        required_columns = ['date', 'Open', 'High', 'Low', 'Close', 'Volume', 'company_name']
-        
-        # Process each ticker
-        for i in range(0, len(tickers), batch_size):
-            batch = tickers[i:i + batch_size]
-            logger.info(f"Processing batch {i//batch_size + 1} with tickers: {batch}")
-            for ticker in batch:
-                # Fetch historical data (last 30 days)
-                historical_df = get_historical_data(ticker, days=historical_days)
-                if historical_df.empty and latest_db_date:
-                    logger.warning(f"No historical data for {ticker}, fetching full range")
-                
-                # Fetch new data from yfinance unless using db only
-                new_df = pd.DataFrame()
-                if not use_db_only and missing_dates:
-                    start_date = min(missing_dates)
-                    new_df = fetch_yfinance_data(ticker, start_date, end_date)
-                    logger.info(f"Fetched {len(new_df)} rows for {ticker}, last date: {new_df['date'].iloc[-1] if not new_df.empty else 'empty'}, columns: {list(new_df.columns) if not new_df.empty else 'empty'}")
-                
-                # Combine historical and new data
-                combined_df = pd.concat([historical_df, new_df], ignore_index=True)
-                if combined_df.empty:
-                    logger.warning(f"Combined DataFrame is empty for {ticker}, skipping")
-                    continue
-                
-                combined_df = combined_df.drop_duplicates(subset=['date'], keep='last').sort_values('date')
-                logger.info(f"Combined {len(combined_df)} rows for {ticker}, dates: {combined_df['date'].iloc[0] if not combined_df.empty else 'empty'} to {combined_df['date'].iloc[-1] if not combined_df.empty else 'empty'}, columns: {list(combined_df.columns)}")
-                
-                # Ensure consistent columns
-                missing_cols = [col for col in required_columns if col not in combined_df.columns]
-                for col in missing_cols:
-                    combined_df[col] = None
-                combined_df = combined_df[required_columns]
-                
-                # Recalculate indicators if enough data
-                if len(combined_df) >= max(14 + 1, 14 + 3):
-                    try:
-                        adx, pdi, mdi = calculate_adx_dmi(combined_df)
-                        k, d = calculate_stochastic(combined_df)
-                        combined_df['adx'] = adx
-                        combined_df['pdi'] = pdi
-                        combined_df['mdi'] = mdi
-                        combined_df['k'] = k
-                        combined_df['d'] = d
-                    except Exception as e:
-                        logger.error(f"Indicator calculation failed for {ticker}: {e}")
-                        combined_df['adx'] = combined_df['pdi'] = combined_df['mdi'] = combined_df['k'] = combined_df['d'] = None
-                
-                # Store recalculated indicators for the latest historical date or new data
-                update_df = combined_df[combined_df['date'] >= latest_db_date]
-                if not update_df.empty:
-                    store_stock_data(ticker, update_df)
-                    trim_excess_entries(ticker, max_entries)
-                else:
-                    logger.warning(f"No data to store for {ticker} after date {latest_db_date}")
-                time.sleep(0.5)  # Increased delay for yfinance stability
-        
-        # Delete data older than 180 days
-        delete_old_data(max_age_days=180)
-        update_metadata()
-        logger.info("Data update completed")
-    except Exception as e:
-        logger.error(f"Error updating data: {e}")
-        raise
-    logger.info("Updating stock data")
-    try:
-        # Get the latest date in the database
-        latest_db_date = get_latest_db_date()
-        current_date = datetime.now().date()
-        end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')  # Yesterday
-        if not latest_db_date:
-            logger.warning("No data in database, triggering full rebuild")
-            rebuild_database()
-            return
-        
-        # Check if data is stale (not same as current date)
-        latest_db_datetime = pd.to_datetime(latest_db_date).date()
-        logger.info(f"Latest database date: {latest_db_date}, current date: {current_date}")
-        if latest_db_datetime >= current_date:
-            logger.info("Database is up-to-date (same as or newer than current date), no update needed")
-            return
-        
-        # Generate list of missing dates
-        missing_dates = []
-        current = latest_db_datetime + timedelta(days=1)
-        while current <= current_date - timedelta(days=1):
-            missing_dates.append(current.strftime('%Y-%m-%d'))
-            current += timedelta(days=1)
-        logger.info(f"Missing dates to fetch: {missing_dates}")
-        
-        # Verify ticker consistency
-        tickers = get_all_tickers()
-        logger.info(f"Processing {len(tickers)} tickers from database")
-        inconsistent_tickers = []
-        for ticker in tickers:
-            ticker_latest_date = get_latest_date(ticker)
-            if ticker_latest_date != latest_db_date:
-                inconsistent_tickers.append((ticker, ticker_latest_date))
-        if inconsistent_tickers:
-            logger.warning(f"Inconsistent latest dates detected: {inconsistent_tickers}")
-            logger.info("Triggering full rebuild to ensure consistency")
-            rebuild_database()
-            return
-        
-        # Define required columns
-        required_columns = ['date', 'Open', 'High', 'Low', 'Close', 'Volume', 'company_name']
-        
-        # Process each ticker
-        for i in range(0, len(tickers), batch_size):
-            batch = tickers[i:i + batch_size]
-            logger.info(f"Processing batch {i//batch_size + 1} with tickers: {batch}")
-            for ticker in batch:
-                # Fetch historical data (last 30 days)
-                historical_df = get_historical_data(ticker, days=historical_days)
-                if historical_df.empty and latest_db_date:
-                    logger.warning(f"No historical data for {ticker}, fetching full range")
-                
-                # Fetch new data from yfinance unless using db only
-                new_df = pd.DataFrame()
-                if not use_db_only and missing_dates:
-                    start_date = min(missing_dates)
-                    new_df = fetch_yfinance_data(ticker, start_date, end_date)
-                    logger.info(f"Fetched {len(new_df)} rows for {ticker}, last date: {new_df['date'].iloc[-1] if not new_df.empty else 'empty'}, columns: {list(new_df.columns) if not new_df.empty else 'empty'}")
-                
-                # Combine historical and new data
-                combined_df = pd.concat([historical_df, new_df], ignore_index=True)
-                if combined_df.empty:
-                    logger.warning(f"Combined DataFrame is empty for {ticker}, skipping")
-                    continue
-                
-                combined_df = combined_df.drop_duplicates(subset=['date'], keep='last').sort_values('date')
-                logger.info(f"Combined {len(combined_df)} rows for {ticker}, dates: {combined_df['date'].iloc[0] if not combined_df.empty else 'empty'} to {combined_df['date'].iloc[-1] if not combined_df.empty else 'empty'}, columns: {list(combined_df.columns)}")
-                
-                # Ensure consistent columns
-                missing_cols = [col for col in required_columns if col not in combined_df.columns]
-                for col in missing_cols:
-                    combined_df[col] = None
-                combined_df = combined_df[required_columns]
-                
-                # Recalculate indicators if enough data
-                if len(combined_df) >= max(14 + 1, 14 + 3):
-                    try:
-                        adx, pdi, mdi = calculate_adx_dmi(combined_df)
-                        k, d = calculate_stochastic(combined_df)
-                        combined_df['adx'] = adx
-                        combined_df['pdi'] = pdi
-                        combined_df['mdi'] = mdi
-                        combined_df['k'] = k
-                        combined_df['d'] = d
-                    except Exception as e:
-                        logger.error(f"Indicator calculation failed for {ticker}: {e}")
-                        combined_df['adx'] = combined_df['pdi'] = combined_df['mdi'] = combined_df['k'] = combined_df['d'] = None
-                
-                # Store recalculated indicators for the latest historical date or new data
-                update_df = combined_df[combined_df['date'] >= latest_db_date]
-                if not update_df.empty:
-                    store_stock_data(ticker, update_df)
-                    trim_excess_entries(ticker, max_entries)
-                else:
-                    logger.warning(f"No data to store for {ticker} after date {latest_db_date}")
-                time.sleep(0.2)
-        
-        # Delete data older than 180 days
-        delete_old_data(max_age_days=180)
-        update_metadata()
-        logger.info("Data update completed")
-    except Exception as e:
-        logger.error(f"Error updating data: {e}")
-        raise
-    logger.info("Updating stock data")
-    try:
-        # Get the latest date in the database
-        latest_db_date = get_latest_db_date()
-        if not latest_db_date:
-            logger.warning("No data in database, triggering full rebuild")
-            rebuild_database()
-            return
-        
-        # Check if data is stale (not same as current date)
-        latest_db_datetime = pd.to_datetime(latest_db_date).date()
-        current_date = datetime.now().date()
-        logger.info(f"Latest database date: {latest_db_date}, current date: {current_date}")
-        if latest_db_datetime >= current_date:
-            logger.info("Database is up-to-date (same as or newer than current date), no update needed")
-            return
-        
-        # Determine the most recent available date (yesterday)
         end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-        start_date = (latest_db_datetime + timedelta(days=1)).strftime('%Y-%m-%d')
-        
-        # Verify the latest date is consistent across tickers
-        tickers = get_all_tickers()
-        logger.info(f"Processing {len(tickers)} tickers from database")
-        inconsistent_tickers = []
-        for ticker in tickers:
-            ticker_latest_date = get_latest_date(ticker)
-            if ticker_latest_date != latest_db_date:
-                inconsistent_tickers.append((ticker, ticker_latest_date))
-        if inconsistent_tickers:
-            logger.warning(f"Inconsistent latest dates detected: {inconsistent_tickers}")
-            logger.info("Triggering full rebuild to ensure consistency")
+        if not latest_db_date:
+            logger.warning("No data in database, triggering full rebuild")
             rebuild_database()
             return
-        
-        # Define required columns
-        required_columns = ['date', 'Open', 'High', 'Low', 'Close', 'Volume', 'company_name']
-        
-        # Fetch and update data for each ticker
-        for i in range(0, len(tickers), batch_size):
-            batch = tickers[i:i + batch_size]
-            logger.info(f"Processing batch {i//batch_size + 1} with tickers: {batch}")
-            for ticker in batch:
-                # Fetch historical data from database (last 30 days)
-                historical_df = get_historical_data(ticker, days=historical_days)
-                if historical_df.empty and latest_db_date:
-                    logger.warning(f"No historical data for {ticker}, fetching full range")
-                
-                # Fetch new data from yfinance
-                new_df = fetch_yfinance_data(ticker, start_date, end_date)
-                logger.info(f"Fetched {len(new_df)} rows for {ticker}, last date: {new_df['date'].iloc[-1] if not new_df.empty else 'empty'}, columns: {list(new_df.columns) if not new_df.empty else 'empty'}")
-                
-                # Check if both DataFrames are empty
-                if historical_df.empty and new_df.empty:
-                    logger.warning(f"No data available for {ticker}, skipping")
-                    continue
-                
-                # Ensure consistent columns
-                if not historical_df.empty:
-                    historical_df = historical_df[required_columns]
-                if not new_df.empty:
-                    new_df = new_df[required_columns]
-                
-                # Combine historical and new data
-                combined_df = pd.concat([historical_df, new_df], ignore_index=True)
-                if combined_df.empty:
-                    logger.warning(f"Combined DataFrame is empty for {ticker}, skipping")
-                    continue
-                
-                combined_df = combined_df.drop_duplicates(subset=['date'], keep='last').sort_values('date')
-                logger.info(f"Combined {len(combined_df)} rows for {ticker}, dates: {combined_df['date'].iloc[0] if not combined_df.empty else 'empty'} to {combined_df['date'].iloc[-1] if not combined_df.empty else 'empty'}, columns: {list(combined_df.columns)}")
-                
-                # Recalculate indicators if there's enough data
-                if len(combined_df) >= max(14 + 1, 14 + 3):
-                    try:
-                        adx, pdi, mdi = calculate_adx_dmi(combined_df)
-                        k, d = calculate_stochastic(combined_df)
-                        combined_df['adx'] = adx
-                        combined_df['pdi'] = pdi
-                        combined_df['mdi'] = mdi
-                        combined_df['k'] = k
-                        combined_df['d'] = d
-                    except Exception as e:
-                        logger.error(f"Indicator calculation failed for {ticker}: {e}")
-                        combined_df['adx'] = combined_df['pdi'] = combined_df['mdi'] = combined_df['k'] = combined_df['d'] = None
-                
-                # Store only the new data (from start_date onward)
-                if not new_df.empty:
-                    update_df = combined_df[combined_df['date'] >= start_date]
-                    if not update_df.empty:
-                        store_stock_data(ticker, update_df)
-                        trim_excess_entries(ticker, max_entries)
-                time.sleep(0.2)
-        
-        # Delete data older than 180 days
+        latest_db_datetime = pd.to_datetime(latest_db_date).date()
+        if latest_db_datetime >= current_date:
+            logger.info("Database is up-to-date")
+            return
+        start_date = (latest_db_datetime + timedelta(days=1)).strftime('%Y-%m-%d')
+        for ticker in tickers:
+            logger.info(f"Processing {ticker}")
+            df = fetch_yfinance_data(ticker, start_date, end_date)
+            if not df.empty:
+                try:
+                    adx, pdi, mdi = calculate_adx_dmi(df)
+                    k, d = calculate_stochastic(df)
+                    df['adx'] = adx
+                    df['pdi'] = pdi
+                    df['mdi'] = mdi
+                    df['k'] = k
+                    df['d'] = d
+                except Exception as e:
+                    logger.error(f"Indicator calculation failed for {ticker}: {e}")
+                    df['adx'] = df['pdi'] = df['mdi'] = df['k'] = df['d'] = None
+                store_stock_data(ticker, df)
+            time.sleep(0.2)
         delete_old_data(max_age_days=180)
         update_metadata()
         logger.info("Data update completed")
     except Exception as e:
         logger.error(f"Error updating data: {e}")
         raise
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 def delete_old_data(max_age_days: int = 180):
     try:
@@ -905,8 +516,8 @@ def delete_old_data(max_age_days: int = 180):
 
 def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
     logger.info(f"Fetching live prices for {len(tickers)} favorited tickers")
-    if not ALPACA_API_KEY or not ALPACA_SECRET_KEY or "YOUR_ALPACA" in [ALPACA_API_KEY, ALPACA_SECRET_KEY]:
-        logger.error("Alpaca API key or secret is not set or invalid")
+    if not tickers:
+        logger.error("No tickers provided")
         return pd.DataFrame()
     try:
         cdt_tz = pytz.timezone('America/Chicago')
@@ -929,15 +540,16 @@ def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
         result = []
         for ticker in tickers:
             quote = data["quotes"].get(ticker)
-            if quote and quote.get("ap"):  # Use ask price (ap) for quote
+            if quote and quote.get("ap") and quote.get("pc"):
                 try:
                     result.append({
                         "ticker": ticker,
                         "price": float(quote["ap"]),
+                        "previous_close": float(quote["pc"]),
                         "timestamp": timestamp
                     })
                 except ValueError as e:
-                    logger.error(f"Invalid price for {ticker}: {quote['ap']}, error: {e}")
+                    logger.error(f"Invalid price or previous close for {ticker}: {quote}, error: {e}")
         df = pd.DataFrame(result)
         logger.info(f"Fetched live prices for {len(df)} tickers")
         return df

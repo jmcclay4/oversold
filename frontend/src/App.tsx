@@ -4,7 +4,7 @@ import { StockChart } from './components/StockChart';
 import { LoadingSpinner } from './components/LoadingSpinner';
 import { ErrorMessage } from './components/ErrorMessage';
 import { analyzeTrackedStocks, fetchAllTickers, fetchMetadata, analyzeStockTicker, fetchLivePrices } from './services/stockDataService';
-import { StockAnalysisResult, FilterCriteria, LivePrice } from './types';
+import { StockAnalysisResult, FilterCriteria, LivePrice, StockAnalysisTableProps } from './types';
 
 const App: React.FC = () => {
   console.log('App component rendering...');
@@ -19,8 +19,8 @@ const App: React.FC = () => {
   const [showMenu, setShowMenu] = useState(false);
   const [newTicker, setNewTicker] = useState('');
   const [lastOhlcvUpdate, setLastOhlcvUpdate] = useState<string | null>(null);
+  const [livePriceUpdate, setLivePriceUpdate] = useState<string | null>(null);
   const [livePrices, setLivePrices] = useState<Record<string, LivePrice>>({});
-  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
 
   useEffect(() => {
     console.log('Loading stored favorites and custom tickers...');
@@ -42,49 +42,17 @@ const App: React.FC = () => {
     localStorage.setItem('customTickers', JSON.stringify(customTickers));
   }, [customTickers]);
 
-  const fetchLivePricesForFavorites = useCallback(async () => {
-    if (favoriteTickers.size === 0) return;
-    setIsRefreshing(true);
-    try {
-      const tickers = Array.from(favoriteTickers);
-      const prices = await fetchLivePrices(tickers);
-      setLivePrices(prev => ({
-        ...prev,
-        ...Object.fromEntries(prices.map(p => [p.ticker, p]))
-      }));
-    } catch (error) {
-      console.error('Error fetching live prices:', error);
-      setGlobalError('Failed to fetch live prices for favorited stocks');
-    } finally {
-      setIsRefreshing(false);
-    }
-  }, [favoriteTickers]);
-
-  useEffect(() => {
-    fetchLivePricesForFavorites();
-  }, [favoriteTickers, fetchLivePricesForFavorites]);
-
   const toggleFavorite = useCallback((ticker: string) => {
     setFavoriteTickers(prev => {
       const newFavorites = new Set(prev);
       if (newFavorites.has(ticker)) {
         newFavorites.delete(ticker);
-        setLivePrices(prev => {
-          const updated = { ...prev };
-          delete updated[ticker];
-          return updated;
-        });
       } else {
+        if (newFavorites.size >= 10) {
+          alert('Maximum 10 favorite tickers allowed.');
+          return prev;
+        }
         newFavorites.add(ticker);
-        fetchLivePrices([ticker]).then(prices => {
-          setLivePrices(prev => ({
-            ...prev,
-            ...Object.fromEntries(prices.map(p => [p.ticker, p]))
-          }));
-        }).catch(error => {
-          console.error(`Error fetching price for ${ticker}:`, error);
-          setGlobalError(`Failed to fetch price for ${ticker}`);
-        });
       }
       return newFavorites;
     });
@@ -131,9 +99,6 @@ const App: React.FC = () => {
     if (selectedTickerForChart === ticker) {
       setSelectedTickerForChart(null);
     }
-    if (favoriteTickers.has(ticker)) {
-      toggleFavorite(ticker);
-    }
   };
 
   const fetchInitialData = async () => {
@@ -146,14 +111,23 @@ const App: React.FC = () => {
         throw new Error('No tickers available');
       }
       console.log('Fetched tickers:', tickers.length);
-      const allTickers = [...tickers, ...customTickers];
+      const allTickers = [...new Set([...tickers, ...customTickers])];
       const results = await analyzeTrackedStocks(allTickers);
       console.log('Loaded stocks:', results.length, results.slice(0, 3));
       setAllAnalysisResults(results);
       const metadata = await fetchMetadata();
       setLastOhlcvUpdate(metadata.last_ohlcv_update || 'Unknown');
       if (favoriteTickers.size > 0) {
-        await fetchLivePricesForFavorites();
+        const favoriteTickerList = Array.from(favoriteTickers);
+        const livePricesData = await fetchLivePrices(favoriteTickerList);
+        const livePricesMap = livePricesData.reduce((acc, item) => {
+          acc[item.ticker] = item;
+          return acc;
+        }, {} as Record<string, LivePrice>);
+        setLivePrices(livePricesMap);
+        if (livePricesData.length > 0) {
+          setLivePriceUpdate(livePricesData[0].timestamp);
+        }
       }
     } catch (error) {
       const errMsg = `Error analyzing stocks: ${(error as Error).message}`;
@@ -167,7 +141,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     fetchInitialData();
-  }, [customTickers, fetchLivePricesForFavorites]);
+  }, [customTickers]);
 
   useEffect(() => {
     console.log('Filtering results, allAnalysisResults length:', allAnalysisResults.length);
@@ -176,7 +150,8 @@ const App: React.FC = () => {
     const searchTerm = filterCriteria.searchTerm?.trim();
     if (searchTerm) {
       filtered = filtered.filter(stock =>
-        stock.ticker.toLowerCase().includes(searchTerm.toLowerCase())
+        stock.ticker.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (stock.companyName && stock.companyName.toLowerCase().includes(searchTerm.toLowerCase()))
       );
     }
 
@@ -205,6 +180,15 @@ const App: React.FC = () => {
     return stock || null;
   }, [selectedTickerForChart, allAnalysisResults]);
 
+  const stockAnalysisTableProps: StockAnalysisTableProps = {
+    results: displayedAnalysisResults,
+    favoriteTickers,
+    onToggleFavorite: toggleFavorite,
+    onRowClick: handleSelectStockForChart,
+    selectedTickerForChart,
+    livePrices
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 text-gray-200 p-4 sm:p-6 flex flex-col">
       <header className="mb-6 flex justify-between items-center">
@@ -213,16 +197,7 @@ const App: React.FC = () => {
         </h1>
         <div className="text-right text-xs text-slate-500">
           <p>OHLCV Data: {lastOhlcvUpdate || '...'}</p>
-          <p>Live Price: {Object.values(livePrices)[0]?.timestamp || '...'}</p>
-          {favoriteTickers.size > 0 && (
-            <button
-              onClick={fetchLivePricesForFavorites}
-              disabled={isRefreshing}
-              className={`ml-2 px-2 py-1 rounded-lg ${isRefreshing ? 'bg-gray-600' : 'bg-blue-600 hover:bg-blue-700'} text-white text-xs`}
-            >
-              {isRefreshing ? 'Refreshing...' : 'Refresh Prices'}
-            </button>
-          )}
+          <p>Live Price: {livePriceUpdate || '...'}</p>
         </div>
       </header>
 
@@ -234,7 +209,7 @@ const App: React.FC = () => {
         <div className="my-4 p-4 bg-slate-800 shadow-xl rounded-xl flex flex-col sm:flex-row gap-4 items-center justify-between">
           <input
             type="text"
-            placeholder="Search by ticker..."
+            placeholder="Search by ticker or company..."
             className="flex-grow p-2 border border-slate-600 bg-slate-700 text-slate-200 rounded-lg focus:ring-2 focus:ring-sky-500 w-full sm:w-auto"
             value={filterCriteria.searchTerm ?? ''}
             onChange={(e) => setFilterCriteria({ searchTerm: e.target.value })}
@@ -244,6 +219,13 @@ const App: React.FC = () => {
             className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-200"
           >
             Manage Stocks
+          </button>
+          <button
+            onClick={fetchInitialData}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-white"
+            aria-label="Refresh data"
+          >
+            Refresh
           </button>
         </div>
 
@@ -297,14 +279,7 @@ const App: React.FC = () => {
         )}
 
         {!isLoading && allAnalysisResults.length > 0 && (
-          <StockAnalysisTable 
-            results={displayedAnalysisResults} 
-            favoriteTickers={favoriteTickers}
-            onToggleFavorite={toggleFavorite}
-            onRowClick={handleSelectStockForChart}
-            selectedTickerForChart={selectedTickerForChart}
-            livePrices={livePrices}
-          />
+          <StockAnalysisTable {...stockAnalysisTableProps} />
         )}
         
       </main>
@@ -313,7 +288,7 @@ const App: React.FC = () => {
           OVERSOLD Dashboard. For educational purposes. Not financial advice.
         </p>
         <p className="text-xs text-gray-500 mt-1">
-          Data provided by Alpaca and Yahoo Finance.
+          Data provided by Yahoo Finance and Alpaca Markets.
         </p>
       </footer>
     </div>
