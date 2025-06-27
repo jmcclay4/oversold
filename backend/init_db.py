@@ -6,6 +6,7 @@ import numpy as np
 import logging
 import os
 import time
+import requests
 from typing import List, Optional
 from sp500_tickers import SP500_TICKERS
 import pytz
@@ -14,7 +15,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 DB_PATH = "/data/stocks.db"
-ALPHA_VANTAGE_API_KEY = "T9YOQWD20T259F4I" # API Key
+ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY", "YOUR_API_KEY")
 
 def wilders_smoothing(data: np.ndarray, period: int) -> np.ndarray:
     smoothed = np.array([None] * len(data), dtype=float)
@@ -359,20 +360,6 @@ def calculate_stochastic(df: pd.DataFrame, k_period: int = 9, d_period: int = 3)
     except Exception as e:
         logger.error(f"Error in Stochastic calculation: {e}")
         return np.array([None] * len(df)), np.array([None] * len(df))
-
-import yfinance as yf
-import pandas as pd
-from datetime import datetime, timedelta
-import pytz
-import time
-import logging
-
-import yfinance as yf
-import pandas as pd
-from datetime import datetime, timedelta
-import pytz
-import time
-import logging
 
 def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataFrame:
     if not isinstance(ticker, str):
@@ -916,6 +903,9 @@ def delete_old_data(max_age_days: int = 180):
 
 def fetch_live_prices(tickers: List[str], batch_size: int = 100) -> pd.DataFrame:
     logger.info(f"Fetching live prices for {len(tickers)} tickers")
+    if not ALPHA_VANTAGE_API_KEY or ALPHA_VANTAGE_API_KEY == "YOUR_API_KEY":
+        logger.error("Alpha Vantage API key is not set or invalid")
+        return pd.DataFrame()
     try:
         cdt_tz = pytz.timezone('America/Chicago')
         timestamp = datetime.now(cdt_tz).strftime("%m/%d %H:%M")
@@ -924,23 +914,36 @@ def fetch_live_prices(tickers: List[str], batch_size: int = 100) -> pd.DataFrame
             batch = tickers[i:i + batch_size]
             ticker_str = ",".join(batch)
             url = f"https://www.alphavantage.co/query?function=BATCH_STOCK_QUOTES&symbols={ticker_str}&apikey={ALPHA_VANTAGE_API_KEY}"
-            response = requests.get(url)
+            logger.info(f"Requesting Alpha Vantage URL: {url}")
+            response = requests.get(url, timeout=10)
+            logger.info(f"Alpha Vantage response status: {response.status_code}")
+            logger.debug(f"Alpha Vantage response: {response.text}")
             response.raise_for_status()
-            data = response.json().get("Stock Quotes", [])
-            for quote in data:
-                ticker = quote["1. symbol"]
-                if ticker in batch:
-                    result.append({
-                        "ticker": ticker,
-                        "price": float(quote["2. price"]),
-                        "timestamp": timestamp
-                    })
-            time.sleep(12)  # Alpha Vantage: 5 calls/minute (12s delay)
+            data = response.json()
+            if "Stock Quotes" not in data:
+                logger.error(f"No 'Stock Quotes' in response: {data}")
+                continue
+            for quote in data["Stock Quotes"]:
+                ticker = quote.get("1. symbol")
+                price = quote.get("2. price")
+                if ticker in batch and price:
+                    try:
+                        result.append({
+                            "ticker": ticker,
+                            "price": float(price),
+                            "timestamp": timestamp
+                        })
+                    except ValueError as e:
+                        logger.error(f"Invalid price for {ticker}: {price}, error: {e}")
+            time.sleep(15)  # Respect 5 calls/minute limit
         df = pd.DataFrame(result)
         logger.info(f"Fetched live prices for {len(df)} tickers")
         return df
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Network error fetching live prices: {e}")
+        return pd.DataFrame()
     except Exception as e:
-        logger.error(f"Error fetching live prices: {e}")
+        logger.error(f"Unexpected error fetching live prices: {e}")
         return pd.DataFrame()
 
 if __name__ == "__main__":
