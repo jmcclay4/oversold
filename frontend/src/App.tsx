@@ -101,6 +101,25 @@ const App: React.FC = () => {
     }
   };
 
+  const fetchLivePricesForFavorites = async () => {
+    if (favoriteTickers.size === 0) return;
+    const favoriteTickerList = Array.from(favoriteTickers);
+    console.log(`Fetching live prices for favorite tickers: ${favoriteTickerList}`);
+    try {
+      const livePricesData = await fetchLivePrices(favoriteTickerList);
+      const livePricesMap = livePricesData.reduce((acc, item) => {
+        acc[item.ticker] = item;
+        return acc;
+      }, {} as Record<string, LivePrice>);
+      setLivePrices(livePricesMap);
+      if (livePricesData.length > 0) {
+        setLivePriceUpdate(livePricesData[0].timestamp);
+      }
+    } catch (error) {
+      console.error(`Error fetching live prices: ${(error as Error).message}`);
+    }
+  };
+
   const fetchInitialData = async () => {
     console.log('Loading initial data...');
     setIsLoading(true);
@@ -117,18 +136,7 @@ const App: React.FC = () => {
       setAllAnalysisResults(results);
       const metadata = await fetchMetadata();
       setLastOhlcvUpdate(metadata.last_ohlcv_update || 'Unknown');
-      if (favoriteTickers.size > 0) {
-        const favoriteTickerList = Array.from(favoriteTickers);
-        const livePricesData = await fetchLivePrices(favoriteTickerList);
-        const livePricesMap = livePricesData.reduce((acc, item) => {
-          acc[item.ticker] = item;
-          return acc;
-        }, {} as Record<string, LivePrice>);
-        setLivePrices(livePricesMap);
-        if (livePricesData.length > 0) {
-          setLivePriceUpdate(livePricesData[0].timestamp);
-        }
-      }
+      await fetchLivePricesForFavorites();
     } catch (error) {
       const errMsg = `Error analyzing stocks: ${(error as Error).message}`;
       console.error(errMsg);
@@ -142,6 +150,12 @@ const App: React.FC = () => {
   useEffect(() => {
     fetchInitialData();
   }, [customTickers]);
+
+  useEffect(() => {
+    fetchLivePricesForFavorites();
+    const interval = setInterval(fetchLivePricesForFavorites, 30000); // Fetch every 30 seconds
+    return () => clearInterval(interval);
+  }, [favoriteTickers]);
 
   useEffect(() => {
     console.log('Filtering results, allAnalysisResults length:', allAnalysisResults.length);

@@ -1,7 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { StockAnalysisResult, OHLCV } from '../types';
-import { ADX_TREND_STRENGTH_THRESHOLD, API_CALL_DELAY_MS } from '../constants';
-import { fetchLivePrices } from '../services/stockDataService';
+import React from 'react';
+import { StockAnalysisResult, OHLCV, LivePrice } from '../types';
+import { ADX_TREND_STRENGTH_THRESHOLD } from '../constants';
 
 interface StockAnalysisTableProps {
   results: StockAnalysisResult[];
@@ -9,6 +8,7 @@ interface StockAnalysisTableProps {
   onToggleFavorite: (ticker: string) => void;
   onRowClick: (ticker: string) => void;
   selectedTickerForChart?: string | null;
+  livePrices: Record<string, LivePrice>;
 }
 
 const getSignalColor = (tag: string, error?: string): string => {
@@ -19,15 +19,15 @@ const getSignalColor = (tag: string, error?: string): string => {
   return 'bg-yellow-700 text-yellow-100';
 };
 
-const getPriceColor = (price?: number, close?: number): string => {
-  if (!price || !close) return 'text-slate-500';
+const getPriceColor = (price: number | null | undefined, close: number | null | undefined): string => {
+  if (price == null || close == null) return 'text-slate-500';
   const diff = ((price - close) / close) * 100;
   if (diff > 0.5) return 'text-green-400';
   if (diff < -0.5) return 'text-red-400';
   return 'text-slate-300';
 };
 
-const formatPrice = (price?: number) => price?.toFixed(2) ?? '-';
+const formatPrice = (price?: number | null) => price != null ? price.toFixed(2) : '-';
 const formatPercent = (percent?: number) => percent !== undefined ? `${percent.toFixed(2)}%` : 'N/A';
 
 const OhlcvDisplay: React.FC<{ ohlcv?: OHLCV }> = ({ ohlcv }) => {
@@ -46,77 +46,9 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
   favoriteTickers,
   onToggleFavorite,
   onRowClick,
-  selectedTickerForChart
+  selectedTickerForChart,
+  livePrices
 }) => {
-  const [livePrices, setLivePrices] = useState<{ [ticker: string]: { price: number, timestamp: string } }>({});
-  const [loadedTickers, setLoadedTickers] = useState<string[]>([]);
-  const [hasMore, setHasMore] = useState<boolean>(true);
-  const tableRef = useRef<HTMLDivElement>(null);
-
-  const fetchLivePricesBatch = async (tickers: string[], reset: boolean = false): Promise<number> => {
-    try {
-      const data: { ticker: string, price: number, timestamp: string }[] = await fetchLivePrices(tickers);
-      const prices = data.reduce((acc: { [ticker: string]: { price: number, timestamp: string } }, item) => {
-        acc[item.ticker] = { price: item.price, timestamp: item.timestamp };
-        return acc;
-      }, {});
-      setLivePrices(prev => (reset ? prices : { ...prev, ...prices }));
-      return data.length;
-    } catch (error) {
-      console.error('Error fetching live prices:', error);
-      return 0;
-    }
-  };
-
-  useEffect(() => {
-    if (results.length > 0) {
-      const tickers = results.map(r => r.ticker);
-      setLoadedTickers(tickers.slice(0, 100));
-      const batches: string[][] = [];
-      for (let i = 0; i < tickers.length; i += 100) {
-        batches.push(tickers.slice(i, i + 100));
-      }
-      const fetchAllBatches = async () => {
-        for (const batch of batches) {
-          await fetchLivePricesBatch(batch);
-          await new Promise(resolve => setTimeout(resolve, API_CALL_DELAY_MS));
-        }
-      };
-      fetchAllBatches();
-    }
-  }, [results]);
-
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting && hasMore) {
-          const start = loadedTickers.length;
-          const nextBatch = results.slice(start, start + 100).map(r => r.ticker);
-          if (nextBatch.length === 0) {
-            setHasMore(false);
-            return;
-          }
-          fetchLivePricesBatch(nextBatch).then((count: number) => {
-            if (count > 0) {
-              setLoadedTickers(prev => [...prev, ...nextBatch]);
-            } else {
-              setHasMore(false);
-            }
-          });
-        }
-      },
-      { threshold: 0.1 }
-    );
-    if (tableRef.current) {
-      observer.observe(tableRef.current);
-    }
-    return () => {
-      if (tableRef.current) {
-        observer.unobserve(tableRef.current);
-      }
-    };
-  }, [loadedTickers, hasMore, results]);
-
   if (results.length === 0) {
     return <p className="text-center text-slate-400 py-4">No analysis results to display.</p>;
   }
@@ -131,20 +63,7 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
             <tr>
               <th scope="col" className={`${headerCellClass} text-center`}>Fav</th>
               <th scope="col" className={headerCellClass}>Ticker</th>
-              <th scope="col" className={headerCellClass}>
-                <div className="flex items-center">
-                  Price
-                  <button
-                    onClick={() => fetchLivePricesBatch(results.map(r => r.ticker), true)}
-                    className="ml-2 p-1 bg-slate-900 hover:bg-slate-700 rounded-full text-white text-xs"
-                    aria-label="Refresh live prices"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h5m-5 0a9 9 0 1114 0v-5h-5" />
-                    </svg>
-                  </button>
-                </div>
-              </th>
+              <th scope="col" className={headerCellClass}>Price</th>
               <th scope="col" className={headerCellClass}>Close</th>
               <th scope="col" className={headerCellClass}>∆</th>
               <th scope="col" className={headerCellClass}>ADX</th>
@@ -235,7 +154,6 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
           </tbody>
         </table>
       </div>
-      <div ref={tableRef} className="h-10"></div>
     </div>
   );
 };

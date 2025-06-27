@@ -23,9 +23,9 @@ export interface IndicatorValues {
 
 export interface LivePrice {
   ticker: string;
-  price: number;
-  previous_close: number;
-  timestamp: string;
+  price: number | null;
+  timestamp: string | null;
+  volume: number | null;
 }
 
 export interface StockAnalysisResult {

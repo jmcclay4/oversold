@@ -7,7 +7,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 import uvicorn
-from init_db import init_db, update_data, rebuild_database
+from init_db import init_db, update_data, rebuild_database, fetch_live_prices
 from datetime import datetime
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -32,24 +32,34 @@ async def lifespan(app: FastAPI):
             conn.close()
             init_db()
             logger.info("Database tables created")
+            rebuild_database()
+            logger.info("Database rebuilt due to missing ohlcv table")
         else:
-            cursor.execute("SELECT last_update FROM metadata WHERE key = 'last_ohlcv_update'")
-            result = cursor.fetchone()
-            last_update = result[0] if result else None
-            if last_update:
-                last_update_dt = datetime.strptime(last_update, "%Y-%m-%d %H:%M:%S")
-                if (datetime.now() - last_update_dt).days >= 1:
-                    logger.warning(f"Database outdated (last update: {last_update}), updating")
+            cursor.execute("SELECT COUNT(*) FROM ohlcv")
+            row_count = cursor.fetchone()[0]
+            if row_count == 0:
+                logger.warning("Table 'ohlcv' is empty, triggering rebuild")
+                conn.close()
+                rebuild_database()
+                logger.info("Database rebuilt due to empty ohlcv table")
+            else:
+                cursor.execute("SELECT last_update FROM metadata WHERE key = 'last_ohlcv_update'")
+                result = cursor.fetchone()
+                last_update = result[0] if result else None
+                if last_update:
+                    last_update_dt = datetime.strptime(last_update, "%Y-%m-%d %H:%M:%S")
+                    if (datetime.now() - last_update_dt).days >= 1:
+                        logger.warning(f"Database outdated (last update: {last_update}), updating")
+                        conn.close()
+                        update_data()
+                        logger.info("Database updated on startup")
+                    else:
+                        logger.info("Database is up-to-date")
+                else:
+                    logger.warning("No last_ohlcv_update found, updating database")
                     conn.close()
                     update_data()
                     logger.info("Database updated on startup")
-                else:
-                    logger.info("Database is up-to-date")
-            else:
-                logger.warning("No last_ohlcv_update found, updating database")
-                conn.close()
-                update_data()
-                logger.info("Database updated on startup")
     except Exception as e:
         logger.error(f"Error during startup: {e}")
         raise
@@ -67,7 +77,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
-    expose_headers=["Access-Control-Allow-Origin"],
+    expose_headers=["Access-Control-Allow-Origin"]
 )
 
 class OHLCV(BaseModel):
@@ -91,6 +101,13 @@ class BatchStockDataResponse(BaseModel):
     ticker: str
     company_name: Optional[str]
     latest_ohlcv: Optional[OHLCV]
+
+class LivePriceResponse(BaseModel):
+    ticker: str
+    price: Optional[float]
+    previous_close: Optional[float]
+    timestamp: Optional[str]
+    volume: Optional[int]
 
 class MetadataResponse(BaseModel):
     last_ohlcv_update: Optional[str]
@@ -207,6 +224,47 @@ async def get_batch_stock_data(tickers: List[str], response: Response):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
+
+@app.get("/live-prices", response_model=List[LivePriceResponse])
+async def get_live_prices(tickers: str, response: Response):
+    logger.info(f"Received live prices request for tickers: {tickers}")
+    response.headers["Cache-Control"] = "no-cache"
+    try:
+        ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+        if not ticker_list:
+            logger.warning("No valid tickers provided")
+            return []
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        previous_closes = {}
+        for ticker in ticker_list:
+            cursor.execute("SELECT close FROM ohlcv WHERE ticker = ? ORDER BY date DESC LIMIT 1", (ticker,))
+            result = cursor.fetchone()
+            previous_closes[ticker] = result[0] if result else None
+        conn.close()
+        live_data = await fetch_live_prices(ticker_list)
+        if live_data.empty:
+            logger.warning("No live price data returned")
+            return [LivePriceResponse(ticker=t, price=None, previous_close=previous_closes.get(t, None), timestamp=None, volume=None) for t in ticker_list]
+        results = [
+            LivePriceResponse(
+                ticker=row["ticker"],
+                price=row["price"],
+                previous_close=previous_closes.get(row["ticker"], None),
+                timestamp=row["timestamp"],
+                volume=row["volume"]
+            )
+            for _, row in live_data.iterrows()
+        ]
+        ticker_set = set(ticker_list)
+        for ticker in ticker_set:
+            if ticker not in {r.ticker for r in results}:
+                results.append(LivePriceResponse(ticker=ticker, price=None, previous_close=previous_closes.get(ticker, None), timestamp=None, volume=None))
+        logger.info(f"Returning live prices for {len(results)} tickers")
+        return results
+    except Exception as e:
+        logger.error(f"Error fetching live prices: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/metadata", response_model=MetadataResponse)
 async def get_metadata(response: Response):

@@ -100,11 +100,17 @@ export const fetchLivePrices = async (tickers: string[]): Promise<LivePrice[]> =
       throw new Error(`HTTP error ${response.status}`);
     }
     const data: LivePrice[] = await response.json();
-    console.log(`Received live prices for ${data.length} tickers`);
+    console.log(`Received live prices for ${data.length} tickers`, data);
     return data;
   } catch (err) {
     console.error('Live prices fetch error:', err);
-    return [];
+    return tickers.map(ticker => ({
+      ticker,
+      price: null,
+      previous_close: null,
+      timestamp: null,
+      volume: null
+    }));
   }
 };
 
