@@ -5,3 +5,4 @@ pandas
 numpy
 pytz
 requests>=2.31.0
+python-dotenv

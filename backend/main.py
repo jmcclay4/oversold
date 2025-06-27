@@ -105,7 +105,6 @@ class BatchStockDataResponse(BaseModel):
 class LivePriceResponse(BaseModel):
     ticker: str
     price: Optional[float]
-    previous_close: Optional[float]
     timestamp: Optional[str]
     volume: Optional[int]
 
@@ -234,23 +233,14 @@ async def get_live_prices(tickers: str, response: Response):
         if not ticker_list:
             logger.warning("No valid tickers provided")
             return []
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        previous_closes = {}
-        for ticker in ticker_list:
-            cursor.execute("SELECT close FROM ohlcv WHERE ticker = ? ORDER BY date DESC LIMIT 1", (ticker,))
-            result = cursor.fetchone()
-            previous_closes[ticker] = result[0] if result else None
-        conn.close()
         live_data = await fetch_live_prices(ticker_list)
         if live_data.empty:
             logger.warning("No live price data returned")
-            return [LivePriceResponse(ticker=t, price=None, previous_close=previous_closes.get(t, None), timestamp=None, volume=None) for t in ticker_list]
+            return [LivePriceResponse(ticker=t, price=None, timestamp=None, volume=None) for t in ticker_list]
         results = [
             LivePriceResponse(
                 ticker=row["ticker"],
                 price=row["price"],
-                previous_close=previous_closes.get(row["ticker"], None),
                 timestamp=row["timestamp"],
                 volume=row["volume"]
             )
@@ -259,7 +249,7 @@ async def get_live_prices(tickers: str, response: Response):
         ticker_set = set(ticker_list)
         for ticker in ticker_set:
             if ticker not in {r.ticker for r in results}:
-                results.append(LivePriceResponse(ticker=ticker, price=None, previous_close=previous_closes.get(ticker, None), timestamp=None, volume=None))
+                results.append(LivePriceResponse(ticker=ticker, price=None, timestamp=None, volume=None))
         logger.info(f"Returning live prices for {len(results)} tickers")
         return results
     except Exception as e:
