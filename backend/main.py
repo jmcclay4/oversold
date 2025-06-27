@@ -7,7 +7,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 import uvicorn
-from init_db import init_db, update_data, rebuild_database
+from init_db import init_db, update_data, rebuild_database, fetch_live_prices, SP500_TICKERS
 from datetime import datetime
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
