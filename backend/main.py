@@ -95,6 +95,12 @@ class BatchStockDataResponse(BaseModel):
 class MetadataResponse(BaseModel):
     last_ohlcv_update: Optional[str]
 
+class LivePriceResponse(BaseModel):
+    ticker: str
+    price: float
+    previous_close: float
+    timestamp: str
+
 @app.get("/stocks/tickers", response_model=List[str])
 async def get_all_tickers():
     logger.info("Received request for all tickers")
@@ -243,6 +249,30 @@ async def rebuild_database_endpoint():
     except Exception as e:
         logger.error(f"Error rebuilding database: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to rebuild database: {str(e)}")
+    
+@app.get("/live-prices", response_model=List[LivePriceResponse])
+async def get_live_prices(tickers: Optional[str] = None, batch_size: int = 100):
+    logger.info(f"Received request for live prices, tickers: {tickers or 'all'}")
+    try:
+        ticker_list = tickers.split(",") if tickers else SP500_TICKERS
+        ticker_list = [t.upper() for t in ticker_list if t.upper() in SP500_TICKERS]
+        df = fetch_live_prices(ticker_list, batch_size)
+        if df.empty:
+            raise HTTPException(status_code=500, detail="No live price data available")
+        results = [
+            LivePriceResponse(
+                ticker=row["ticker"],
+                price=row["price"],
+                previous_close=row["previous_close"],
+                timestamp=row["timestamp"]
+            )
+            for _, row in df.iterrows()
+        ]
+        logger.info(f"Returning live prices for {len(results)} tickers")
+        return results
+    except Exception as e:
+        logger.error(f"Error fetching live prices: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     logger.info("Starting Uvicorn server")

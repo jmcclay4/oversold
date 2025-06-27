@@ -89,6 +89,22 @@ export const fetchMetadata = async (): Promise<{ last_ohlcv_update: string | nul
   }
 };
 
+export const fetchLivePrices = async (tickers: string[]): Promise<{ ticker: string, price: number, timestamp: string }[]> => {
+  console.log(`Fetching live prices for ${tickers.length} tickers`);
+  try {
+    const response = await fetch(`${API_BASE_URL}/live-prices?tickers=${tickers.join(',')}&batch_size=100`);
+    if (!response.ok) {
+      throw new Error(`HTTP error ${response.status}`);
+    }
+    const data: { ticker: string, price: number, timestamp: string }[] = await response.json();
+    console.log(`Received live prices for ${data.length} tickers`);
+    return data;
+  } catch (err) {
+    console.error('Live prices fetch error:', err);
+    return [];
+  }
+};
+
 const getCompanyName = (ticker: string, ohlcvData: OHLCV[]): string => {
   if (ohlcvData.length > 0 && ohlcvData[0].companyName) {
     return ohlcvData[0].companyName;

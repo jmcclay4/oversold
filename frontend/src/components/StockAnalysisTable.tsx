@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { StockAnalysisResult, OHLCV } from '../types';
-import { ADX_TREND_STRENGTH_THRESHOLD } from '../constants';
+import { ADX_TREND_STRENGTH_THRESHOLD, API_CALL_DELAY_MS } from '../constants';
+import { fetchLivePrices } from '../services/stockDataService';
 
 interface StockAnalysisTableProps {
   results: StockAnalysisResult[];
@@ -18,7 +19,15 @@ const getSignalColor = (tag: string, error?: string): string => {
   return 'bg-yellow-700 text-yellow-100';
 };
 
-const formatPrice = (price?: number) => price?.toFixed(2) ?? 'N/A';
+const getPriceColor = (price?: number, close?: number): string => {
+  if (!price || !close) return 'text-slate-500';
+  const diff = ((price - close) / close) * 100;
+  if (diff > 0.5) return 'text-green-400';
+  if (diff < -0.5) return 'text-red-400';
+  return 'text-slate-300';
+};
+
+const formatPrice = (price?: number) => price?.toFixed(2) ?? '-';
 const formatPercent = (percent?: number) => percent !== undefined ? `${percent.toFixed(2)}%` : 'N/A';
 
 const OhlcvDisplay: React.FC<{ ohlcv?: OHLCV }> = ({ ohlcv }) => {
@@ -39,6 +48,79 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
   onRowClick,
   selectedTickerForChart
 }) => {
+  const [livePrices, setLivePrices] = useState<{ [ticker: string]: { price: number, timestamp: string } }>({});
+  const [lastUpdate, setLastUpdate] = useState<string | null>(null);
+  const [loadedTickers, setLoadedTickers] = useState<string[]>([]);
+  const [hasMore, setHasMore] = useState<boolean>(true);
+  const tableRef = useRef<HTMLDivElement>(null);
+
+  const fetchLivePricesBatch = async (tickers: string[], reset: boolean = false): Promise<number> => {
+    try {
+      const data: { ticker: string, price: number, timestamp: string }[] = await fetchLivePrices(tickers);
+      const prices = data.reduce((acc: { [ticker: string]: { price: number, timestamp: string } }, item) => {
+        acc[item.ticker] = { price: item.price, timestamp: item.timestamp };
+        return acc;
+      }, {});
+      setLivePrices(prev => (reset ? prices : { ...prev, ...prices }));
+      if (data.length > 0) {
+        setLastUpdate(data[0].timestamp);
+      }
+      return data.length;
+    } catch (error) {
+      console.error('Error fetching live prices:', error);
+      return 0;
+    }
+  };
+
+  useEffect(() => {
+    if (results.length > 0) {
+      const tickers = results.map(r => r.ticker);
+      setLoadedTickers(tickers.slice(0, 100));
+      const batches: string[][] = [];
+      for (let i = 0; i < tickers.length; i += 100) {
+        batches.push(tickers.slice(i, i + 100));
+      }
+      const fetchAllBatches = async () => {
+        for (const batch of batches) {
+          await fetchLivePricesBatch(batch);
+          await new Promise(resolve => setTimeout(resolve, API_CALL_DELAY_MS));
+        }
+      };
+      fetchAllBatches();
+    }
+  }, [results]);
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore) {
+          const start = loadedTickers.length;
+          const nextBatch = results.slice(start, start + 100).map(r => r.ticker);
+          if (nextBatch.length === 0) {
+            setHasMore(false);
+            return;
+          }
+          fetchLivePricesBatch(nextBatch).then((count: number) => {
+            if (count > 0) {
+              setLoadedTickers(prev => [...prev, ...nextBatch]);
+            } else {
+              setHasMore(false);
+            }
+          });
+        }
+      },
+      { threshold: 0.1 }
+    );
+    if (tableRef.current) {
+      observer.observe(tableRef.current);
+    }
+    return () => {
+      if (tableRef.current) {
+        observer.unobserve(tableRef.current);
+      }
+    };
+  }, [loadedTickers, hasMore, results]);
+
   if (results.length === 0) {
     return <p className="text-center text-slate-400 py-4">No analysis results to display.</p>;
   }
@@ -47,12 +129,24 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
 
   return (
     <div className="bg-slate-800 shadow-2xl rounded-xl overflow-hidden mt-6">
+      <div className="flex justify-end mb-2 px-3 py-2">
+        <span className="text-xs text-slate-400">Live Price: {lastUpdate || '-'}</span>
+      </div>
       <div className="overflow-x-auto max-h-[60vh]">
         <table className="min-w-full divide-y divide-slate-700">
           <thead className="bg-slate-900">
             <tr>
+              <th scope="col" className={`${headerCellClass} text-center`}>
+                <button
+                  onClick={() => fetchLivePricesBatch(results.map(r => r.ticker), true)}
+                  className="px-2 py-1 bg-blue-600 hover:bg-blue-700 rounded-lg text-white text-xs"
+                >
+                  Refresh
+                </button>
+              </th>
               <th scope="col" className={`${headerCellClass} text-center`}>Fav</th>
               <th scope="col" className={headerCellClass}>Ticker</th>
+              <th scope="col" className={headerCellClass}>Price</th>
               <th scope="col" className={headerCellClass}>Close</th>
               <th scope="col" className={headerCellClass}>∆</th>
               <th scope="col" className={headerCellClass}>ADX</th>
@@ -77,7 +171,7 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
               >
                 <td className="px-3 py-3 whitespace-nowrap text-center">
                   <button 
-                    onClick={(e) => { e.stopPropagation(); onToggleFavorite(result.ticker);}}
+                    onClick={(e) => { e.stopPropagation(); onToggleFavorite(result.ticker); }}
                     className={`text-2xl ${favoriteTickers.has(result.ticker) ? 'text-yellow-400' : 'text-slate-600 hover:text-yellow-500'} transition-colors`}
                     aria-label={favoriteTickers.has(result.ticker) ? `Unfavorite ${result.ticker}` : `Favorite ${result.ticker}`}
                   >
@@ -87,6 +181,9 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
                 <td className="px-3 py-3 whitespace-nowrap">
                   <div className={`text-sm font-semibold ${favoriteTickers.has(result.ticker) ? 'text-sky-300' : 'text-slate-100'}`}>{result.ticker}</div>
                   <div className="text-xs text-slate-400">{result.companyName || 'N/A'}</div>
+                </td>
+                <td className={`px-3 py-3 whitespace-nowrap text-sm ${getPriceColor(livePrices[result.ticker]?.price, result.latestOhlcvDataPoint?.close)}`}>
+                  {formatPrice(livePrices[result.ticker]?.price)}
                 </td>
                 <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-300">
                   {formatPrice(result.latestPrice)}
@@ -130,7 +227,7 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
                       ))
                     ) : (
                       <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getSignalColor('')}`}>
-                        
+                        -
                       </span>
                     )}
                   </div>
@@ -140,6 +237,7 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
           </tbody>
         </table>
       </div>
+      <div ref={tableRef} className="h-10"></div>
     </div>
   );
 };

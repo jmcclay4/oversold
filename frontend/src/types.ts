@@ -25,6 +25,7 @@ export interface StockAnalysisResult {
   ticker: string;
   companyName: string;
   latestPrice?: number;
+  livePrice?: number; 
   percentChange?: number;
   latestOhlcvDataPoint?: OHLCV;
   latestIndicators?: IndicatorValues;

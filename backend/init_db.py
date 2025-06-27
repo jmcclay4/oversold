@@ -14,6 +14,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 DB_PATH = "/data/stocks.db"
+IEX_API_KEY = "" # IEX Cloud API Key
 
 def wilders_smoothing(data: np.ndarray, period: int) -> np.ndarray:
     smoothed = np.array([None] * len(data), dtype=float)
@@ -912,6 +913,36 @@ def delete_old_data(max_age_days: int = 180):
         logger.error(f"Error deleting old data: {e}")
     finally:
         conn.close()
+
+def fetch_live_prices(tickers: List[str], batch_size: int = 100) -> pd.DataFrame:
+    logger.info(f"Fetching live prices for {len(tickers)} tickers")
+    try:
+        cdt_tz = pytz.timezone('America/Chicago')
+        timestamp = datetime.now(cdt_tz).strftime("%m/%d %H:%M")
+        result = []
+        for i in range(0, len(tickers), batch_size):
+            batch = tickers[i:i + batch_size]
+            ticker_str = ",".join(batch)
+            url = f"https://cloud.iexapis.com/stable/stock/market/batch?symbols={ticker_str}&types=quote&token={IEX_API_KEY}"
+            response = requests.get(url)
+            response.raise_for_status()
+            data = response.json()
+            for ticker in batch:
+                if ticker in data and "quote" in data[ticker]:
+                    quote = data[ticker]["quote"]
+                    result.append({
+                        "ticker": ticker,
+                        "price": float(quote["latestPrice"]),
+                        "previous_close": float(quote["previousClose"]),
+                        "timestamp": timestamp
+                    })
+            time.sleep(1)  # Respect IEX Cloud rate limit
+        df = pd.DataFrame(result)
+        logger.info(f"Fetched live prices for {len(df)} tickers")
+        return df
+    except Exception as e:
+        logger.error(f"Error fetching live prices: {e}")
+        return pd.DataFrame()
 
 if __name__ == "__main__":
     logger.info("Running init_db.py as main script")
