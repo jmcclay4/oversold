@@ -112,11 +112,18 @@ const App: React.FC = () => {
         return acc;
       }, {} as Record<string, LivePrice>);
       setLivePrices(livePricesMap);
-      if (livePricesData.length > 0) {
+      if (livePricesData.length > 0 && livePricesData[0].timestamp) {
         setLivePriceUpdate(livePricesData[0].timestamp);
       }
     } catch (error) {
       console.error(`Error fetching live prices: ${(error as Error).message}`);
+      setLivePrices(prev => {
+        const newPrices = { ...prev };
+        favoriteTickerList.forEach(ticker => {
+          newPrices[ticker] = { ticker, price: null, timestamp: null, volume: null };
+        });
+        return newPrices;
+      });
     }
   };
 
@@ -136,7 +143,6 @@ const App: React.FC = () => {
       setAllAnalysisResults(results);
       const metadata = await fetchMetadata();
       setLastOhlcvUpdate(metadata.last_ohlcv_update || 'Unknown');
-      await fetchLivePricesForFavorites();
     } catch (error) {
       const errMsg = `Error analyzing stocks: ${(error as Error).message}`;
       console.error(errMsg);
@@ -152,10 +158,12 @@ const App: React.FC = () => {
   }, [customTickers]);
 
   useEffect(() => {
-    fetchLivePricesForFavorites();
-    const interval = setInterval(fetchLivePricesForFavorites, 30000); // Fetch every 30 seconds
-    return () => clearInterval(interval);
-  }, [favoriteTickers]);
+    if (allAnalysisResults.length > 0 && favoriteTickers.size > 0) {
+      fetchLivePricesForFavorites();
+      const interval = setInterval(fetchLivePricesForFavorites, 30000); // Fetch every 30 seconds
+      return () => clearInterval(interval);
+    }
+  }, [allAnalysisResults, favoriteTickers]);
 
   useEffect(() => {
     console.log('Filtering results, allAnalysisResults length:', allAnalysisResults.length);

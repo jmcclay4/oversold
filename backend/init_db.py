@@ -1,50 +1,29 @@
 import sqlite3
 import yfinance as yf
 import pandas as pd
-from datetime import datetime, timedelta
 import numpy as np
 import logging
 import os
-import time
-from typing import List, Optional
-from sp500_tickers import SP500_TICKERS
-import pytz
+from datetime import datetime, timedelta
+import aiohttp
+import asyncio
+from typing import List
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 DB_PATH = "/data/stocks.db"
 
-def wilders_smoothing(data: np.ndarray, period: int) -> np.ndarray:
-    smoothed = np.array([None] * len(data), dtype=float)
-    if len(data) < period:
-        logger.warning(f"Insufficient data for Wilder's smoothing: need {period}, got {len(data)}")
-        return smoothed
-    valid_data = [x for x in data[:period] if x is not None and not np.isnan(x)]
-    if len(valid_data) >= period / 2:
-        smoothed[period-1] = np.mean(valid_data)
-    for i in range(period, len(data)):
-        if data[i] is None or np.isnan(data[i]):
-            smoothed[i] = None
-        elif smoothed[i-1] is None or np.isnan(smoothed[i-1]):
-            valid_count = sum(1 for x in data[i-period+1:i+1] if x is not None and not np.isnan(x))
-            if valid_count > 0:
-                smoothed[i] = np.mean([x for x in data[i-period+1:i+1] if x is not None and not np.isnan(x)])
-            else:
-                smoothed[i] = None
-        else:
-            smoothed[i] = (smoothed[i-1] * (period-1) + data[i]) / period
-        if i == len(data)-1:
-            logger.info(f"Wilder's smoothing: Input={data[i]}, Smoothed={smoothed[i]}")
-    return smoothed
-
 def init_db():
-    logger.info("Starting init_db function")
+    logger.info("Initializing database")
     try:
-        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("""
+        
+        cursor.execute('''
             CREATE TABLE IF NOT EXISTS ohlcv (
                 ticker TEXT,
                 date TEXT,
@@ -61,456 +40,220 @@ def init_db():
                 d REAL,
                 PRIMARY KEY (ticker, date)
             )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS company_names (
-                ticker TEXT PRIMARY KEY,
-                company_name TEXT NOT NULL,
-                timestamp TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        cursor.execute("""
+        ''')
+        
+        cursor.execute('''
             CREATE TABLE IF NOT EXISTS metadata (
                 key TEXT PRIMARY KEY,
                 last_update TEXT
             )
-        """)
-        cursor.execute("""
-            INSERT OR IGNORE INTO metadata (key, last_update)
-            VALUES ('last_ohlcv_update', ?)
-        """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
+        ''')
+        
         conn.commit()
-        logger.info(f"Database initialized at {DB_PATH}")
+        logger.info("Database tables created successfully")
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
         raise
     finally:
         conn.close()
 
-def rebuild_database():
-    logger.info("Starting database rebuild")
+def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    logger.info("Calculating technical indicators")
+    try:
+        high = df['high']
+        low = df['low']
+        close = df['close']
+        
+        # ADX, +DI, -DI
+        period = 14
+        delta_high = high.diff()
+        delta_low = low.diff()
+        tr = pd.concat([high - low, abs(high - close.shift()), abs(low - close.shift())], axis=1).max(axis=1)
+        atr = tr.rolling(window=period).mean()
+        plus_dm = delta_high.where(delta_high > 0, 0)
+        minus_dm = abs(delta_low.where(delta_low > 0, 0))
+        plus_di = 100 * plus_dm.rolling(window=period).mean() / atr
+        minus_di = 100 * minus_dm.rolling(window=period).mean() / atr
+        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+        adx = dx.rolling(window=period).mean()
+        
+        # Stochastic Oscillator
+        lowest_low = low.rolling(window=period).min()
+        highest_high = high.rolling(window=period).max()
+        k = 100 * (close - lowest_low) / (highest_high - lowest_low)
+        d = k.rolling(window=3).mean()
+        
+        df['adx'] = adx
+        df['pdi'] = plus_di
+        df['mdi'] = minus_di
+        df['k'] = k
+        df['d'] = d
+        return df
+    except Exception as e:
+        logger.error(f"Error calculating indicators: {e}")
+        raise
+
+def get_sp500_tickers():
+    logger.info("Fetching S&P 500 tickers")
+    try:
+        table = pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')[0]
+        tickers = table['Symbol'].tolist()
+        logger.info(f"Fetched {len(tickers)} S&P 500 tickers")
+        return [t.replace('.', '-') for t in tickers]
+    except Exception as e:
+        logger.error(f"Error fetching S&P 500 tickers: {e}")
+        return []
+
+def fetch_stock_data(tickers: List[str], start_date: str, end_date: str) -> pd.DataFrame:
+    logger.info(f"Fetching stock data for {len(tickers)} tickers from {start_date} to {end_date}")
+    try:
+        data = yf.download(tickers, start=start_date, end=end_date, group_by='ticker', auto_adjust=True, progress=False)
+        if len(tickers) == 1:
+            data['ticker'] = tickers[0]
+            data = data.reset_index()[['Date', 'ticker', 'Open', 'High', 'Low', 'Close', 'Volume']]
+            data.columns = ['date', 'ticker', 'open', 'high', 'low', 'close', 'volume']
+        else:
+            data = data.stack(level=0).reset_index().rename(columns={'Date': 'date', 'level_1': 'ticker'})
+            data = data[['date', 'ticker', 'Open', 'High', 'Low', 'Close', 'Volume']]
+            data.columns = ['date', 'ticker', 'open', 'high', 'low', 'close', 'volume']
+        
+        data['date'] = data['date'].dt.strftime('%Y-%m-%d')
+        data['company_name'] = None
+        for ticker in tickers:
+            try:
+                ticker_obj = yf.Ticker(ticker)
+                data.loc[data['ticker'] == ticker, 'company_name'] = ticker_obj.info.get('longName', None)
+            except Exception as e:
+                logger.warning(f"Could not fetch company name for {ticker}: {e}")
+                data.loc[data['ticker'] == ticker, 'company_name'] = None
+        return data
+    except Exception as e:
+        logger.error(f"Error fetching stock data: {e}")
+        return pd.DataFrame()
+
+async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
+    logger.info(f"Fetching live prices for {len(tickers)} tickers")
+    try:
+        api_key = os.getenv("ALPACA_API_KEY")
+        secret_key = os.getenv("ALPACA_SECRET_KEY")
+        if not api_key or not secret_key:
+            logger.error("Alpaca API credentials missing")
+            return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in tickers])
+        
+        headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret_key}
+        base_url = "https://data.alpaca.markets/v2"
+        cdt_tz = datetime.now().astimezone().tzinfo
+        
+        async def fetch_batch(batch: List[str]) -> pd.DataFrame:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    url = f"{base_url}/stocks/quotes/latest?tickers={','.join(batch)}"
+                    async with session.get(url, headers=headers) as response:
+                        if response.status != 200:
+                            logger.warning(f"Alpaca API error for batch {batch}: {response.status}")
+                            return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in batch])
+                        data = await response.json()
+                        quotes = data.get("quotes", {})
+                        results = []
+                        for ticker in batch:
+                            quote = quotes.get(ticker, {})
+                            timestamp = quote.get("t")
+                            if timestamp:
+                                try:
+                                    timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00')).astimezone(cdt_tz).strftime('%Y-%m-%d %H:%M:%S')
+                                except ValueError:
+                                    timestamp = None
+                            results.append({
+                                "ticker": ticker,
+                                "price": quote.get("ap"),
+                                "timestamp": timestamp,
+                                "volume": quote.get("v")
+                            })
+                        return pd.DataFrame(results)
+            except Exception as e:
+                logger.error(f"Error fetching batch {batch}: {e}")
+                return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in batch])
+        
+        batch_size = 100
+        batches = [tickers[i:i + batch_size] for i in range(0, len(tickers), batch_size)]
+        tasks = [fetch_batch(batch) for batch in batches]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        final_results = pd.concat([r for r in results if isinstance(r, pd.DataFrame)], ignore_index=True)
+        logger.info(f"Returning live prices for {len(final_results)} tickers")
+        return final_results
+    except Exception as e:
+        logger.error(f"Error fetching live prices: {e}")
+        return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in tickers])
+
+def update_data():
+    logger.info("Updating database with new stock data")
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("DROP TABLE IF EXISTS ohlcv")
-        cursor.execute("DROP TABLE IF EXISTS company_names")
-        cursor.execute("DROP TABLE IF EXISTS metadata")
+        
+        tickers = get_sp500_tickers()
+        if not tickers:
+            logger.error("No tickers found, aborting update")
+            return
+        
+        end_date = datetime.now().strftime('%Y-%m-%d')
+        start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+        
+        data = fetch_stock_data(tickers, start_date, end_date)
+        if data.empty:
+            logger.error("No stock data fetched, aborting update")
+            return
+        
+        grouped = data.groupby('ticker')
+        for ticker, group in grouped:
+            try:
+                group = calculate_indicators(group)
+                for _, row in group.iterrows():
+                    cursor.execute('''
+                        INSERT OR REPLACE INTO ohlcv (ticker, date, open, high, low, close, volume, company_name, adx, pdi, mdi, k, d)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        ticker,
+                        row['date'],
+                        row['open'],
+                        row['high'],
+                        row['low'],
+                        row['close'],
+                        int(row['volume']),
+                        row['company_name'],
+                        row['adx'] if not pd.isna(row['adx']) else None,
+                        row['pdi'] if not pd.isna(row['pdi']) else None,
+                        row['mdi'] if not pd.isna(row['mdi']) else None,
+                        row['k'] if not pd.isna(row['k']) else None,
+                        row['d'] if not pd.isna(row['d']) else None
+                    ))
+            except Exception as e:
+                logger.error(f"Error processing ticker {ticker}: {e}")
+                continue
+        
+        cursor.execute('''
+            INSERT OR REPLACE INTO metadata (key, last_update)
+            VALUES ('last_ohlcv_update', ?)
+        ''', (datetime.now().strftime('%Y-%m-%d %H:%M:%S'),))
+        
         conn.commit()
-        logger.info("Existing tables dropped")
+        logger.info("Database updated successfully")
+    except Exception as e:
+        logger.error(f"Error updating database: {e}")
+        raise
+    finally:
+        conn.close()
+
+def rebuild_database():
+    logger.info("Rebuilding database")
+    try:
+        if os.path.exists(DB_PATH):
+            os.remove(DB_PATH)
+            logger.info("Existing database removed")
         init_db()
-        tickers = [t for t in SP500_TICKERS if isinstance(t, str)]
-        logger.info(f"Populating database with {len(tickers)} valid ticker(s)")
-        end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-        start_date = (datetime.now() - timedelta(days=181)).strftime('%Y-%m-%d')
-        for ticker in tickers:
-            logger.info(f"Fetching data for {ticker}")
-            df = fetch_yfinance_data(ticker, start_date, end_date)
-            logger.info(f"Fetched {len(df)} rows for {ticker}, last date: {df['date'].iloc[-1] if not df.empty else 'empty'}")
-            if not df.empty:
-                try:
-                    adx, pdi, mdi = calculate_adx_dmi(df)
-                    k, d = calculate_stochastic(df)
-                    df['adx'] = adx
-                    df['pdi'] = pdi
-                    df['mdi'] = mdi
-                    df['k'] = k
-                    df['d'] = d
-                except Exception as e:
-                    logger.error(f"Indicator calculation failed for {ticker}: {e}")
-                    df['adx'] = df['pdi'] = df['mdi'] = df['k'] = df['d'] = None
-                store_stock_data(ticker, df)
-            time.sleep(0.2)
-        logger.info(f"Successfully populated database with data for {len(tickers)} tickers")
-        update_metadata()
-        logger.info("Database rebuild completed")
+        update_data()
+        logger.info("Database rebuilt successfully")
     except Exception as e:
         logger.error(f"Error rebuilding database: {e}")
         raise
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
-def update_metadata():
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT OR REPLACE INTO metadata (key, last_update)
-            VALUES ('last_ohlcv_update', ?)
-        """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
-        conn.commit()
-        logger.info("Updated metadata with last OHLCV update time")
-    except Exception as e:
-        logger.error(f"Error updating metadata: {e}")
-    finally:
-        conn.close()
-
-def get_cached_company_name(ticker: str) -> Optional[str]:
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT company_name FROM company_names WHERE ticker = ?", (ticker,))
-        result = cursor.fetchone()
-        logger.info(f"Retrieved company name for {ticker}: {result[0] if result else None}")
-        return result[0] if result else None
-    except Exception as e:
-        logger.error(f"Error retrieving company name for {ticker}: {e}")
-        return None
-    finally:
-        conn.close()
-
-def store_company_name(ticker: str, company_name: str):
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT OR REPLACE INTO company_names (ticker, company_name)
-            VALUES (?, ?)
-        """, (ticker, company_name))
-        conn.commit()
-        logger.info(f"Cached company name for {ticker}")
-    except Exception as e:
-        logger.error(f"Error storing company name: {e}")
-    finally:
-        conn.close()
-
-def get_all_tickers() -> List[str]:
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT ticker FROM ohlcv ORDER BY ticker")
-        tickers = [row[0] for row in cursor.fetchall()]
-        logger.info(f"Retrieved {len(tickers)} tickers from database")
-        if not tickers:
-            logger.warning("No tickers found, using S&P 500 tickers")
-            tickers = [t for t in SP500_TICKERS if isinstance(t, str)]
-        return tickers
-    except Exception as e:
-        logger.error(f"Error retrieving tickers: {e}")
-        return [t for t in SP500_TICKERS if isinstance(t, str)]
-
-def get_latest_date(ticker: str) -> Optional[str]:
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT MAX(date) FROM ohlcv WHERE ticker = ?", (ticker,))
-        result = cursor.fetchone()
-        return result[0] if result and result[0] else None
-    except Exception as e:
-        logger.error(f"Error getting latest date for {ticker}: {e}")
-        return None
-    finally:
-        conn.close()
-
-def get_latest_db_date() -> Optional[str]:
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT MAX(date) FROM ohlcv")
-        result = cursor.fetchone()
-        latest_date = result[0] if result and result[0] else None
-        logger.info(f"Latest date in database: {latest_date}")
-        return latest_date
-    except Exception as e:
-        logger.error(f"Error retrieving latest date: {e}")
-        return None
-    finally:
-        conn.close()
-
-def trim_excess_entries(ticker: str, max_entries: int = 200):
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM ohlcv WHERE ticker = ?", (ticker,))
-        count = cursor.fetchone()[0]
-        if count > max_entries:
-            cursor.execute("""
-                DELETE FROM ohlcv
-                WHERE ticker = ? AND date IN (
-                    SELECT date FROM ohlcv
-                    WHERE ticker = ?
-                    ORDER BY date ASC
-                    LIMIT ?
-                )
-            """, (ticker, ticker, count - max_entries))
-            conn.commit()
-            logger.info(f"Deleted {count - max_entries} oldest entries for {ticker}")
-    except Exception as e:
-        logger.error(f"Error trimming entries for {ticker}: {e}")
-    finally:
-        conn.close()
-
-def get_historical_data(ticker: str, days: int = 30) -> pd.DataFrame:
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        query = """
-            SELECT date, open, high, low, close, volume, company_name
-            FROM ohlcv
-            WHERE ticker = ?
-            ORDER BY date DESC
-            LIMIT ?
-        """
-        df = pd.read_sql_query(query, conn, params=(ticker, days))
-        df = df.rename(columns={'date': 'date', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'})
-        df = df.sort_values('date')
-        logger.info(f"Retrieved {len(df)} rows of historical data for {ticker}, columns: {list(df.columns)}")
-        return df
-    except Exception as e:
-        logger.error(f"Error retrieving historical data for {ticker}: {e}")
-        return pd.DataFrame()
-    finally:
-        conn.close()
-
-def calculate_adx_dmi(df: pd.DataFrame, dmi_period: int = 9, adx_period: int = 9):
-    logger.info("Calculating ADX and DMI")
-    try:
-        required_columns = ['High', 'Low', 'Close']
-        if not all(col in df.columns for col in required_columns):
-            logger.error(f"Missing required columns for ADX/DMI: {df.columns}")
-            return np.array([None] * len(df)), np.array([None] * len(df)), np.array([None] * len(df))
-        
-        high = df['High'].values
-        low = df['Low'].values
-        close = df['Close'].values
-        n = len(df)
-        if n < dmi_period + 1:
-            logger.warning(f"Not enough data for DMI (need {dmi_period + 1}, got {n})")
-            return np.array([None] * n), np.array([None] * n), np.array([None] * n)
-        
-        logger.info(f"Last row OHLCV: Date={df['date'].iloc[-1]}, High={high[-1]}, Low={low[-1]}, Close={close[-1]}")
-        
-        tr = np.array([None] * n, dtype=float)
-        dm_plus = np.array([None] * n, dtype=float)
-        dm_minus = np.array([None] * n, dtype=float)
-        for i in range(1, n):
-            if (high[i] is None or low[i] is None or close[i-1] is None or 
-                high[i-1] is None or low[i-1] is None or
-                high[i] <= low[i] or close[i] <= 0):
-                logger.warning(f"Skipping row {i} (Date={df['date'].iloc[i]}): High={high[i]}, Low={low[i]}, Close={close[i]}")
-                continue
-            tr[i] = max(high[i] - low[i], abs(high[i] - close[i-1]), abs(low[i] - close[i-1]))
-            up_move = high[i] - high[i-1]
-            down_move = low[i-1] - low[i]
-            dm_plus[i] = up_move if up_move > down_move and up_move > 0 else 0
-            dm_minus[i] = down_move if down_move > up_move and down_move > 0 else 0
-            if i == n-1:
-                logger.info(f"Last row (Date={df['date'].iloc[i]}): TR={tr[i]}, +DM={dm_plus[i]}, -DM={dm_minus[i]}")
-        
-        smoothed_tr = wilders_smoothing(tr, dmi_period)
-        smoothed_dm_plus = wilders_smoothing(dm_plus, dmi_period)
-        smoothed_dm_minus = wilders_smoothing(dm_minus, dmi_period)
-        
-        pdi = np.array([None] * n, dtype=float)
-        mdi = np.array([None] * n, dtype=float)
-        dx = np.array([None] * n, dtype=float)
-        for i in range(dmi_period-1, n):
-            if smoothed_tr[i] is None or smoothed_tr[i] == 0 or smoothed_dm_plus[i] is None or smoothed_dm_minus[i] is None:
-                pdi[i] = mdi[i] = dx[i] = None
-                continue
-            pdi[i] = 100 * smoothed_dm_plus[i] / smoothed_tr[i]
-            mdi[i] = 100 * smoothed_dm_minus[i] / smoothed_tr[i]
-            di_sum = pdi[i] + mdi[i]
-            if di_sum == 0:
-                dx[i] = 0
-            else:
-                dx[i] = 100 * abs(pdi[i] - mdi[i]) / di_sum
-            if i == n-1:
-                logger.info(f"Last row smoothing: Smoothed_TR={smoothed_tr[i]}, Smoothed_+DM={smoothed_dm_plus[i]}, Smoothed_-DM={smoothed_dm_minus[i]}")
-                logger.info(f"Last row indicators: PDI={pdi[i]}, MDI={mdi[i]}, DX={dx[i]}")
-        
-        adx = wilders_smoothing(dx, adx_period)
-        for i in range(dmi_period-1, n):
-            if i == n-1 and adx[i] is not None:
-                logger.info(f"Last row ADX: {adx[i]}")
-        
-        adx = np.where(np.isnan(adx) | (adx == 0), None, adx)
-        pdi = np.where(np.isnan(pdi) | (pdi == 0), None, pdi)
-        mdi = np.where(np.isnan(mdi) | (mdi == 0), None, mdi)
-        
-        return adx, pdi, mdi
-    except Exception as e:
-        logger.error(f"Error in ADX/DMI calculation: {e}")
-        return np.array([None] * len(df)), np.array([None] * len(df)), np.array([None] * len(df))
-
-def calculate_stochastic(df: pd.DataFrame, k_period: int = 9, d_period: int = 3):
-    logger.info("Calculating Stochastic")
-    try:
-        required_columns = ['High', 'Low', 'Close']
-        if not all(col in df.columns for col in required_columns):
-            logger.error(f"Missing required columns for Stochastic: {df.columns}")
-            return np.array([None] * len(df)), np.array([None] * len(df))
-        
-        n = len(df)
-        if n < k_period + d_period - 1:
-            logger.warning(f"Not enough data for Stochastic (need {k_period + d_period - 1}, got {n})")
-            return np.array([None] * n), np.array([None] * n)
-        
-        low_min = df['Low'].rolling(window=k_period, min_periods=k_period).min()
-        high_max = df['High'].rolling(window=k_period, min_periods=k_period).max()
-        k = 100 * (df['Close'] - low_min) / (high_max - low_min + 1e-10)
-        d = k.rolling(window=d_period, min_periods=d_period).mean()
-        logger.info(f"Stochastic %K for last row: {k.values[-1] if n > 0 else None}, %D: {d.values[-1] if n > 0 else None}")
-        
-        k = np.where(np.isnan(k) | (k == 0), None, k.values)
-        d = np.where(np.isnan(d) | (d == 0), None, d.values)
-        
-        return k, d
-    except Exception as e:
-        logger.error(f"Error in Stochastic calculation: {e}")
-        return np.array([None] * len(df)), np.array([None] * len(df))
-
-def fetch_yfinance_data(ticker: str, start_date: str, end_date: str) -> pd.DataFrame:
-    if not isinstance(ticker, str):
-        logger.error(f"Invalid ticker type for {ticker}: expected str, got {type(ticker)}")
-        return pd.DataFrame()
-    retries = 5
-    delay = 1.0
-    cached_name = get_cached_company_name(ticker)
-    company_name = cached_name or f"{ticker} Inc."
-    cdt_tz = pytz.timezone('America/Chicago')
-    current_cdt = datetime.now().astimezone(cdt_tz)
-    market_close = current_cdt.replace(hour=15, minute=0, second=0, microsecond=0)
-    today = current_cdt.strftime('%Y-%m-%d')
-    yesterday = (current_cdt - timedelta(days=1)).strftime('%Y-%m-%d')
-    fetch_end_date = today if current_cdt >= market_close else yesterday
-    for attempt in range(1, retries + 1):
-        try:
-            logger.info(f"Fetching yfinance data for {ticker}, attempt {attempt}, start: {start_date}, end: {fetch_end_date}")
-            stock = yf.Ticker(ticker.upper())
-            info = stock.info
-            if not info or 'symbol' not in info:
-                logger.warning(f"Ticker {ticker} may be delisted or invalid")
-                return pd.DataFrame()
-            df = stock.history(start=start_date, end=fetch_end_date, auto_adjust=True)
-            if df.empty:
-                logger.warning(f"No data found for {ticker} from {start_date} to {fetch_end_date}")
-                return pd.DataFrame()
-            df = df.reset_index()
-            df['date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
-            df = df[['date', 'Open', 'High', 'Low', 'Close', 'Volume']]
-            df = df.sort_values('date').drop_duplicates('date', keep='last')
-            logger.info(f"Fetched {len(df)} rows for {ticker}, dates: {df['date'].iloc[0]} to {df['date'].iloc[-1]}, columns: {list(df.columns)}")
-            if not cached_name:
-                company_name = info.get('longName', f"{ticker} Inc.")
-                store_company_name(ticker, company_name)
-            df['company_name'] = company_name
-            required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-            if not all(col in df.columns for col in required_columns) or df[required_columns].isnull().any().any():
-                logger.warning(f"Invalid or missing OHLCV data for {ticker}")
-                return pd.DataFrame()
-            if (df['Close'] <= 0).any() or (df['High'] <= df['Low']).any():
-                logger.warning(f"Suspicious OHLCV data for {ticker} (zero/negative close or high<=low)")
-                return pd.DataFrame()
-            return df
-        except Exception as e:
-            logger.error(f"Retry {attempt}/{retries} for {ticker}: {e}")
-            if attempt < retries:
-                time.sleep(delay * (2 ** attempt))
-            else:
-                logger.error(f"Failed to fetch data for {ticker}: {e}")
-                return pd.DataFrame()
-
-def store_stock_data(ticker: str, df: pd.DataFrame):
-    if df.empty:
-        logger.warning(f"No data to store for {ticker}")
-        return
-    try:
-        required_columns = ['date', 'Open', 'High', 'Low', 'Close', 'Volume']
-        if not all(col in df.columns for col in required_columns):
-            logger.error(f"Missing required columns for storage: {df.columns}")
-            return
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        for _, row in df.iterrows():
-            cursor.execute("""
-                INSERT OR REPLACE INTO ohlcv (ticker, date, open, high, low, close, volume, company_name, adx, pdi, mdi, k, d)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                ticker,
-                row['date'],
-                row.get('Open'),
-                row.get('High'),
-                row.get('Low'),
-                row.get('Close'),
-                int(row.get('Volume', 0)),
-                row.get('company_name'),
-                row.get('adx'),
-                row.get('pdi'),
-                row.get('mdi'),
-                row.get('k'),
-                row.get('d')
-            ))
-        conn.commit()
-        logger.info(f"Stored {len(df)} rows for {ticker}")
-    except Exception as e:
-        logger.error(f"Error storing data for {ticker}: {e}")
-        raise
-    finally:
-        conn.close()
-
-def update_data(tickers: List[str] = None):
-    logger.info("Starting data update")
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        tickers = tickers or get_all_tickers()
-        if not tickers:
-            logger.warning("No tickers available, triggering full rebuild")
-            rebuild_database()
-            return
-        latest_db_date = get_latest_db_date()
-        current_date = datetime.now().date()
-        end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-        if not latest_db_date:
-            logger.warning("No data in database, triggering full rebuild")
-            rebuild_database()
-            return
-        latest_db_datetime = pd.to_datetime(latest_db_date).date()
-        if latest_db_datetime >= current_date:
-            logger.info("Database is up-to-date")
-            return
-        start_date = (latest_db_datetime + timedelta(days=1)).strftime('%Y-%m-%d')
-        for ticker in tickers:
-            logger.info(f"Processing {ticker}")
-            df = fetch_yfinance_data(ticker, start_date, end_date)
-            if not df.empty:
-                try:
-                    adx, pdi, mdi = calculate_adx_dmi(df)
-                    k, d = calculate_stochastic(df)
-                    df['adx'] = adx
-                    df['pdi'] = pdi
-                    df['mdi'] = mdi
-                    df['k'] = k
-                    df['d'] = d
-                except Exception as e:
-                    logger.error(f"Indicator calculation failed for {ticker}: {e}")
-                    df['adx'] = df['pdi'] = df['mdi'] = df['k'] = df['d'] = None
-                store_stock_data(ticker, df)
-            time.sleep(0.2)
-        delete_old_data(max_age_days=180)
-        update_metadata()
-        logger.info("Data update completed")
-    except Exception as e:
-        logger.error(f"Error updating data: {e}")
-        raise
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
-def delete_old_data(max_age_days: int = 180):
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cutoff_date = (datetime.now() - timedelta(days=max_age_days)).strftime('%Y-%m-%d')
-        cursor.execute("DELETE FROM ohlcv WHERE date < ?", (cutoff_date,))
-        conn.commit()
-        logger.info(f"Deleted data older than {cutoff_date}")
-    except Exception as e:
-        logger.error(f"Error deleting old data: {e}")
-    finally:
-        conn.close()
-
-if __name__ == "__main__":
-    logger.info("Running init_db.py as main script")
-    init_db()
-    update_data()
-    logger.info("init_db.py execution completed")
