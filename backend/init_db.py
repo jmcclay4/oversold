@@ -901,7 +901,7 @@ def delete_old_data(max_age_days: int = 180):
     finally:
         conn.close()
 
-def fetch_live_prices(tickers: List[str], batch_size: int = 100) -> pd.DataFrame:
+def fetch_live_prices(tickers: List[str], batch_size: int = 5) -> pd.DataFrame:
     logger.info(f"Fetching live prices for {len(tickers)} tickers")
     if not ALPHA_VANTAGE_API_KEY or ALPHA_VANTAGE_API_KEY == "YOUR_API_KEY":
         logger.error("Alpha Vantage API key is not set or invalid")
@@ -912,21 +912,20 @@ def fetch_live_prices(tickers: List[str], batch_size: int = 100) -> pd.DataFrame
         result = []
         for i in range(0, len(tickers), batch_size):
             batch = tickers[i:i + batch_size]
-            ticker_str = ",".join(batch)
-            url = f"https://www.alphavantage.co/query?function=BATCH_STOCK_QUOTES&symbols={ticker_str}&apikey={ALPHA_VANTAGE_API_KEY}"
-            logger.info(f"Requesting Alpha Vantage URL: {url}")
-            response = requests.get(url, timeout=10)
-            logger.info(f"Alpha Vantage response status: {response.status_code}")
-            logger.debug(f"Alpha Vantage response: {response.text}")
-            response.raise_for_status()
-            data = response.json()
-            if "Stock Quotes" not in data:
-                logger.error(f"No 'Stock Quotes' in response: {data}")
-                continue
-            for quote in data["Stock Quotes"]:
-                ticker = quote.get("1. symbol")
-                price = quote.get("2. price")
-                if ticker in batch and price:
+            for ticker in batch:
+                url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={ticker}&apikey={ALPHA_VANTAGE_API_KEY}"
+                logger.info(f"Requesting Alpha Vantage URL: {url}")
+                response = requests.get(url, timeout=10)
+                logger.info(f"Alpha Vantage response status: {response.status_code}")
+                logger.debug(f"Alpha Vantage response: {response.text}")
+                response.raise_for_status()
+                data = response.json()
+                if "Global Quote" not in data:
+                    logger.error(f"No 'Global Quote' in response for {ticker}: {data}")
+                    continue
+                quote = data["Global Quote"]
+                price = quote.get("05. price")
+                if price:
                     try:
                         result.append({
                             "ticker": ticker,
@@ -935,7 +934,7 @@ def fetch_live_prices(tickers: List[str], batch_size: int = 100) -> pd.DataFrame
                         })
                     except ValueError as e:
                         logger.error(f"Invalid price for {ticker}: {price}, error: {e}")
-            time.sleep(15)  # Respect 5 calls/minute limit
+                time.sleep(12)  # 5 calls/minute = ~12s per call
         df = pd.DataFrame(result)
         logger.info(f"Fetched live prices for {len(df)} tickers")
         return df
