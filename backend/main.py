@@ -7,7 +7,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 import uvicorn
-from init_db import init_db, update_data, rebuild_database, fetch_live_prices, SP500_TICKERS
+from init_db import init_db, update_data, rebuild_database
 from datetime import datetime
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -39,17 +39,17 @@ async def lifespan(app: FastAPI):
             if last_update:
                 last_update_dt = datetime.strptime(last_update, "%Y-%m-%d %H:%M:%S")
                 if (datetime.now() - last_update_dt).days >= 1:
-                    logger.warning(f"Database outdated (last update: {last_update}), rebuilding")
+                    logger.warning(f"Database outdated (last update: {last_update}), updating")
                     conn.close()
-                    rebuild_database()
-                    logger.info("Database rebuilt on startup")
+                    update_data()
+                    logger.info("Database updated on startup")
                 else:
                     logger.info("Database is up-to-date")
             else:
-                logger.warning("No last_ohlcv_update found, rebuilding database")
+                logger.warning("No last_ohlcv_update found, updating database")
                 conn.close()
-                rebuild_database()
-                logger.info("Database rebuilt on startup")
+                update_data()
+                logger.info("Database updated on startup")
     except Exception as e:
         logger.error(f"Error during startup: {e}")
         raise
@@ -95,12 +95,6 @@ class BatchStockDataResponse(BaseModel):
 class MetadataResponse(BaseModel):
     last_ohlcv_update: Optional[str]
 
-class LivePriceResponse(BaseModel):
-    ticker: str
-    price: float
-    previous_close: float
-    timestamp: str
-
 @app.get("/stocks/tickers", response_model=List[str])
 async def get_all_tickers():
     logger.info("Received request for all tickers")
@@ -109,9 +103,6 @@ async def get_all_tickers():
         cursor = conn.cursor()
         cursor.execute("SELECT DISTINCT ticker FROM ohlcv ORDER BY ticker")
         tickers = [row[0] for row in cursor.fetchall()]
-        if not tickers:
-            logger.warning("No tickers found in database, returning SP500_TICKERS")
-            tickers = [t for t in SP500_TICKERS if isinstance(t, str)]
         logger.info(f"Returning {len(tickers)} tickers")
         return tickers
     except Exception as e:
@@ -134,6 +125,7 @@ async def get_stock_data(ticker: str):
         """, (ticker.upper(),))
         rows = cursor.fetchall()
         if not rows:
+            logger.warning(f"No data found for ticker {ticker}")
             raise HTTPException(status_code=404, detail=f"No data found for ticker {ticker}")
         ohlcv_data = [
             OHLCV(
@@ -178,9 +170,9 @@ async def get_batch_stock_data(tickers: List[str], response: Response):
                 WHERE ticker = ohlcv.ticker
             )
         """
-        cursor.execute(query, tickers)
+        cursor.execute(query, [t.upper() for t in tickers])
         rows = cursor.fetchall()
-        ticker_set = set(tickers)
+        ticker_set = set(t.upper() for t in tickers)
         results = []
         for row in rows:
             results.append(BatchStockDataResponse(
@@ -227,6 +219,8 @@ async def get_metadata(response: Response):
         result = cursor.fetchone()
         last_update = result[0] if result else None
         logger.info(f"Returning last OHLCV update: {last_update}")
+        if last_update is None:
+            logger.warning("No last_ohlcv_update found in metadata table")
         return MetadataResponse(last_ohlcv_update=last_update)
     except sqlite3.Error as e:
         logger.error(f"Database error fetching metadata: {e}")
@@ -258,36 +252,6 @@ async def rebuild_database_endpoint():
     except Exception as e:
         logger.error(f"Error rebuilding database: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to rebuild database: {str(e)}")
-
-@app.get("/live-prices", response_model=List[LivePriceResponse])
-async def get_live_prices(tickers: Optional[str] = None):
-    logger.info(f"Received request for live prices, tickers: {tickers or 'none'}")
-    if not tickers:
-        raise HTTPException(status_code=400, detail="No tickers provided")
-    try:
-        ticker_list = [t.upper() for t in tickers.split(",") if t]
-        if not ticker_list:
-            raise HTTPException(status_code=400, detail="No valid tickers provided")
-        if len(ticker_list) > 10:
-            ticker_list = ticker_list[:10]
-            logger.warning(f"Limiting to 10 tickers: {ticker_list}")
-        df = fetch_live_prices(ticker_list)
-        if df.empty:
-            raise HTTPException(status_code=500, detail="No live price data available")
-        results = [
-            LivePriceResponse(
-                ticker=row["ticker"],
-                price=row["price"],
-                previous_close=row["previous_close"],
-                timestamp=row["timestamp"]
-            )
-            for _, row in df.iterrows()
-        ]
-        logger.info(f"Returning live prices for {len(results)} tickers")
-        return results
-    except Exception as e:
-        logger.error(f"Error fetching live prices: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     logger.info("Starting Uvicorn server")

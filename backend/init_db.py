@@ -4,8 +4,8 @@ import pandas as pd
 from datetime import datetime, timedelta
 import numpy as np
 import logging
+import os
 import time
-import requests
 from typing import List, Optional
 from sp500_tickers import SP500_TICKERS
 import pytz
@@ -14,9 +14,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 DB_PATH = "/data/stocks.db"
-ALPACA_API_KEY = "PKB8ZTJLFRSW93Z5IDI7"
-ALPACA_SECRET_KEY = "gO6TAmXeYtVSag3lXGaSVwvaLzShax13dKDcTguf"
-ALPACA_BASE_URL = "https://data.alpaca.markets/v2"
 
 def wilders_smoothing(data: np.ndarray, period: int) -> np.ndarray:
     smoothed = np.array([None] * len(data), dtype=float)
@@ -83,18 +80,12 @@ def init_db():
             VALUES ('last_ohlcv_update', ?)
         """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
         conn.commit()
-        cursor.execute("SELECT DISTINCT ticker FROM ohlcv")
-        existing_tickers = [row[0] for row in cursor.fetchall()]
-        missing_tickers = [t for t in SP500_TICKERS if t not in existing_tickers and isinstance(t, str)]
-        if missing_tickers:
-            logger.info(f"Found {len(missing_tickers)} missing tickers, updating database")
-            update_data(missing_tickers)
-        else:
-            logger.info("Database is up-to-date")
-        conn.close()
+        logger.info(f"Database initialized at {DB_PATH}")
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
         raise
+    finally:
+        conn.close()
 
 def rebuild_database():
     logger.info("Starting database rebuild")
@@ -462,6 +453,10 @@ def update_data(tickers: List[str] = None):
     try:
         conn = sqlite3.connect(DB_PATH)
         tickers = tickers or get_all_tickers()
+        if not tickers:
+            logger.warning("No tickers available, triggering full rebuild")
+            rebuild_database()
+            return
         latest_db_date = get_latest_db_date()
         current_date = datetime.now().date()
         end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
@@ -513,52 +508,6 @@ def delete_old_data(max_age_days: int = 180):
         logger.error(f"Error deleting old data: {e}")
     finally:
         conn.close()
-
-def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
-    logger.info(f"Fetching live prices for {len(tickers)} favorited tickers")
-    if not tickers:
-        logger.error("No tickers provided")
-        return pd.DataFrame()
-    try:
-        cdt_tz = pytz.timezone('America/Chicago')
-        timestamp = datetime.now(cdt_tz).strftime("%m/%d %H:%M")
-        headers = {
-            "APCA-API-KEY-ID": ALPACA_API_KEY,
-            "APCA-API-SECRET-KEY": ALPACA_SECRET_KEY
-        }
-        ticker_str = ",".join(tickers)
-        url = f"{ALPACA_BASE_URL}/stocks/quotes/latest?symbols={ticker_str}&feed=iex"
-        logger.info(f"Requesting Alpaca URL: {url}")
-        response = requests.get(url, headers=headers, timeout=10)
-        logger.info(f"Alpaca response status: {response.status_code}")
-        logger.debug(f"Alpaca response: {response.text}")
-        response.raise_for_status()
-        data = response.json()
-        if "quotes" not in data:
-            logger.error(f"No 'quotes' in response: {data}")
-            return pd.DataFrame()
-        result = []
-        for ticker in tickers:
-            quote = data["quotes"].get(ticker)
-            if quote and quote.get("ap") and quote.get("pc"):
-                try:
-                    result.append({
-                        "ticker": ticker,
-                        "price": float(quote["ap"]),
-                        "previous_close": float(quote["pc"]),
-                        "timestamp": timestamp
-                    })
-                except ValueError as e:
-                    logger.error(f"Invalid price or previous close for {ticker}: {quote}, error: {e}")
-        df = pd.DataFrame(result)
-        logger.info(f"Fetched live prices for {len(df)} tickers")
-        return df
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Network error fetching live prices: {e}")
-        return pd.DataFrame()
-    except Exception as e:
-        logger.error(f"Unexpected error fetching live prices: {e}")
-        return pd.DataFrame()
 
 if __name__ == "__main__":
     logger.info("Running init_db.py as main script")
