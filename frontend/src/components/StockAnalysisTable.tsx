@@ -197,7 +197,7 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
                   {result.latestIndicators?.adx != null ? result.latestIndicators.adx.toFixed(2) : 'N/A'}
                 </td>
                 <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-300">
-                  {result.latestIndicators?.pdi != null ? result.latest Indicators.pdi.toFixed(2) : 'N/A'}
+                  {result.latestIndicators?.pdi != null ? result.latestIndicators.pdi.toFixed(2) : 'N/A'}
                 </td>
                 <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-300">
                   {result.latestIndicators?.mdi != null ? result.latestIndicators.mdi.toFixed(2) : 'N/A'}
