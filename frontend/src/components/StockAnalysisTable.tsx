@@ -10,6 +10,9 @@ interface StockAnalysisTableProps {
   onRowClick: (ticker: string) => void;
   selectedTickerForChart?: string | null;
   livePrices: Record<string, LivePrice>;
+  lastOhlcvUpdate: string | null;
+  lastLiveUpdate: string | null;
+  onRefreshLivePrices: () => void;
 }
 
 const getSignalColor = (tag: string, error?: string): string => {
@@ -34,23 +37,6 @@ const formatPercent = (price?: number | null, close?: number | null) => {
   return `${((price - close) / close * 100).toFixed(2)}%`;
 };
 
-const formatTimestampToEST = (timestamp?: string): string => {
-  if (!timestamp) return '-';
-  try {
-    const date = new Date(timestamp);
-    return date.toLocaleString('en-US', {
-      timeZone: 'America/New_York',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: true
-    });
-  } catch (error) {
-    console.error('Error formatting timestamp:', error);
-    return '-';
-  }
-};
-
 const OhlcvDisplay: React.FC<{ ohlcv?: OHLCV }> = ({ ohlcv }) => {
   if (!ohlcv) return <span className="text-slate-500">-</span>;
   return (
@@ -68,7 +54,10 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
   onToggleFavorite,
   onRowClick,
   selectedTickerForChart,
-  livePrices
+  livePrices,
+  lastOhlcvUpdate,
+  lastLiveUpdate,
+  onRefreshLivePrices
 }) => {
   if (results.length === 0) {
     return <p className="text-center text-slate-400 py-4">No analysis results to display.</p>;
@@ -84,7 +73,16 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
             <tr>
               <th scope="col" className={`${headerCellClass} text-center`}>Fav</th>
               <th scope="col" className={headerCellClass}>Ticker</th>
-              <th scope="col" className={`${headerCellClass} bg-slate-700`}>Price</th>
+              <th scope="col" className={`${headerCellClass} bg-slate-700`}>
+                Price
+                <button
+                  onClick={(e) => { e.stopPropagation(); onRefreshLivePrices(); }}
+                  className="ml-2 px-2 py-1 bg-slate-900 text-slate-300 text-sm rounded hover:bg-slate-700"
+                  aria-label="Refresh live prices"
+                >
+                  ⟳
+                </button>
+              </th>
               <th scope="col" className={`${headerCellClass} bg-slate-700`}>∆</th>
               <th scope="col" className={headerCellClass}>Close</th>
               <th scope="col" className={headerCellClass}>ADX</th>
@@ -94,6 +92,20 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
               <th scope="col" className={headerCellClass}>%D</th>
               <th scope="col" className={`${headerCellClass} min-w-[150px]`}>Latest OHLCV</th>
               <th scope="col" className={`${headerCellClass} min-w-[200px]`}>Signals</th>
+            </tr>
+            <tr className="bg-slate-900">
+              <td className={`${headerCellClass} text-center`}></td>
+              <td className={headerCellClass}></td>
+              <td className={`${headerCellClass} bg-slate-700`}>{lastLiveUpdate || '-'}</td>
+              <td className={`${headerCellClass} bg-slate-700`}></td>
+              <td className={headerCellClass}>{lastOhlcvUpdate || '-'}</td>
+              <td className={headerCellClass}></td>
+              <td className={headerCellClass}></td>
+              <td className={headerCellClass}></td>
+              <td className={headerCellClass}></td>
+              <td className={headerCellClass}></td>
+              <td className={`${headerCellClass} min-w-[150px]`}></td>
+              <td className={`${headerCellClass} min-w-[200px]`}></td>
             </tr>
           </thead>
           <tbody className="bg-slate-800 divide-y divide-slate-700">
@@ -122,9 +134,6 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
                 </td>
                 <td className={`px-3 py-3 whitespace-nowrap text-sm bg-slate-700 ${getPriceColor(livePrices[result.ticker]?.price, result.latestOhlcvDataPoint?.close)}`}>
                   {formatPrice(livePrices[result.ticker]?.price)}
-                  {livePrices[result.ticker]?.timestamp != null && (
-                    <div className="text-xs text-slate-400">{formatTimestampToEST(livePrices[result.ticker].timestamp ?? undefined)}</div>
-                  )}
                 </td>
                 <td className="px-3 py-3 whitespace-nowrap text-sm bg-slate-700 text-slate-300">
                   {formatPercent(livePrices[result.ticker]?.price, result.latestOhlcvDataPoint?.close)}

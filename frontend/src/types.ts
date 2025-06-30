@@ -67,4 +67,7 @@ export interface StockAnalysisTableProps {
   onRowClick: (ticker: string) => void;
   selectedTickerForChart: string | null;
   livePrices: Record<string, LivePrice>;
+  lastOhlcvUpdate: string | null;
+  lastLiveUpdate: string | null;
+  onRefreshLivePrices: () => void;
 }
