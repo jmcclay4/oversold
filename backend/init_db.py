@@ -130,15 +130,19 @@ def fetch_stock_data(tickers: List[str], start_date: str, end_date: str) -> pd.D
         return pd.DataFrame()
 
 async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
-    logger.info(f"Fetching live prices for {len(tickers)} tickers")
+    logger.info(f"Fetching live prices for {len(tickers)} tickers: {tickers}")
     try:
         api_key = os.getenv("ALPACA_API_KEY")
         secret_key = os.getenv("ALPACA_SECRET_KEY")
+        logger.info(f"API Key present: {bool(api_key)}, Secret Key present: {bool(secret_key)}")
         if not api_key or not secret_key:
             logger.error("Alpaca API credentials missing")
             return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in tickers])
         
-        headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret_key}
+        headers = {
+            "APCA-API-KEY-ID": api_key,
+            "APCA-API-SECRET-KEY": secret_key
+        }
         base_url = "https://data.alpaca.markets/v2"
         cdt_tz = datetime.now().astimezone().tzinfo
         
@@ -146,11 +150,15 @@ async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
             try:
                 async with aiohttp.ClientSession() as session:
                     url = f"{base_url}/stocks/quotes/latest?tickers={','.join(batch)}"
+                    logger.info(f"Sending request to: {url}")
                     async with session.get(url, headers=headers) as response:
+                        logger.info(f"Response status: {response.status}")
                         if response.status != 200:
-                            logger.warning(f"Alpaca API error for batch {batch}: {response.status}")
+                            text = await response.text()
+                            logger.warning(f"Alpaca API error for batch {batch}: {response.status} - {text}")
                             return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in batch])
                         data = await response.json()
+                        logger.info(f"Response data: {data}")
                         quotes = data.get("quotes", {})
                         results = []
                         for ticker in batch:
