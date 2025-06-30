@@ -175,7 +175,7 @@ async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
                                 logger.warning(f"Invalid price for {ticker}: {price}")
                                 if attempt < 4:
                                     logger.info(f"Retrying {ticker} due to invalid price")
-                                    await asyncio.sleep(0.1)  # 0.1-second delay
+                                    await asyncio.sleep(0.2)  # 0.1-second delay
                                     retry_result = await fetch_batch([ticker], attempt + 1)
                                     if not retry_result.empty and retry_result.iloc[0]["price"] is not None:
                                         results.append(retry_result.iloc[0].to_dict())
