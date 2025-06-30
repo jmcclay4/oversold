@@ -147,19 +147,22 @@ async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
         }
         base_url = "https://data.alpaca.markets/v2"
         
-        async def fetch_batch(batch: List[str]) -> pd.DataFrame:
+        async def fetch_batch(batch: List[str], attempt: int = 1) -> pd.DataFrame:
             try:
                 async with aiohttp.ClientSession() as session:
                     url = f"{base_url}/stocks/quotes/latest?symbols={','.join(batch)}"
-                    logger.info(f"Sending request to: {url}")
+                    logger.info(f"Attempt {attempt} - Sending request to: {url}")
                     async with session.get(url, headers=headers) as response:
-                        logger.info(f"Response status: {response.status}")
+                        logger.info(f"Attempt {attempt} - Response status: {response.status}")
                         if response.status != 200:
                             text = await response.text()
-                            logger.warning(f"Alpaca API error for batch {batch}: {response.status} - {text}")
+                            logger.warning(f"Attempt {attempt} - Alpaca API error for batch {batch}: {response.status} - {text}")
+                            if attempt < 2:
+                                logger.info(f"Retrying batch {batch}")
+                                return await fetch_batch(batch, attempt + 1)
                             return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in batch])
                         data = await response.json()
-                        logger.info(f"Response data: {data}")
+                        logger.info(f"Attempt {attempt} - Response data: {data}")
                         quotes = data.get("quotes", {})
                         results = []
                         est_tz = pytz.timezone('America/New_York')  # Define EST timezone
@@ -168,6 +171,14 @@ async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
                             timestamp = quote.get("t")
                             volume = quote.get("v") if quote.get("v") is not None else None
                             price = quote.get("ap") if quote.get("ap") is not None else None
+                            if price == 0 or price is None:
+                                logger.warning(f"Invalid price for {ticker}: {price}")
+                                if attempt < 2:
+                                    logger.info(f"Retrying {ticker} due to invalid price")
+                                    retry_result = await fetch_batch([ticker], attempt + 1)
+                                    if not retry_result.empty and retry_result.iloc[0]["price"] is not None:
+                                        results.append(retry_result.iloc[0].to_dict())
+                                        continue
                             if timestamp:
                                 try:
                                     # Handle high-precision timestamps by truncating to microseconds
@@ -188,7 +199,10 @@ async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
                             })
                         return pd.DataFrame(results)
             except Exception as e:
-                logger.error(f"Error fetching batch {batch}: {e}")
+                logger.error(f"Attempt {attempt} - Error fetching batch {batch}: {e}")
+                if attempt < 2:
+                    logger.info(f"Retrying batch {batch}")
+                    return await fetch_batch(batch, attempt + 1)
                 return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in batch])
         
         batch_size = 100
@@ -202,7 +216,6 @@ async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
     except Exception as e:
         logger.error(f"Error fetching live prices: {e}")
         return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in tickers])
-
 def update_data():
     logger.info("Updating database with new stock data")
     try:

@@ -122,7 +122,7 @@
         if (latestTimestamp) {
           const date = new Date(latestTimestamp);
           setLastLiveUpdate(date.toLocaleString('en-US', {
-            timeZone: 'America/New_York',
+            timeZone: 'America/Chicago',
             hour: '2-digit',
             minute: '2-digit',
             hour12: true
