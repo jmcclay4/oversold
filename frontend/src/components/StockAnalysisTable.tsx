@@ -74,7 +74,7 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
             <tr>
               <th scope="col" className={`${headerCellClass} text-center`}>Fav</th>
               <th scope="col" className={headerCellClass}>Ticker</th>
-              <th scope="col" className={`${headerCellClass} bg-slate-700 flex justify-start items-center`}>
+              <th scope="col" className={`${headerCellClass} bg-slate-800 flex justify-start items-center`}>
                 <button
                   onClick={(e) => { e.stopPropagation(); onRefreshLivePrices(); }}
                   className="px-1 py-0.5 bg-slate-800 text-slate-300 text-sx rounded hover:bg-slate-600"
@@ -83,7 +83,7 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
                   PRICE ⟳
                 </button>
               </th>
-              <th scope="col" className={`${headerCellClass} bg-slate-700`}>∆</th>
+              <th scope="col" className={`${headerCellClass} bg-slate-800`}>∆</th>
               <th scope="col" className={headerCellClass}>Close</th>
               <th scope="col" className={headerCellClass}>ADX</th>
               <th scope="col" className={headerCellClass}>+DI</th>
@@ -96,8 +96,8 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
             <tr className="bg-slate-900">
               <td className={`${updateCellClass} text-center`}></td>
               <td className={updateCellClass}></td>
-              <td className={`${updateCellClass} bg-slate-700 text-slate-400`}>{lastLiveUpdate || '-'}</td>
-              <td className={`${updateCellClass} bg-slate-700 text-slate-400`}></td>
+              <td className={`${updateCellClass} bg-slate-800 text-slate-400`}>{lastLiveUpdate || '-'}</td>
+              <td className={`${updateCellClass} bg-slate-800 text-slate-400`}></td>
               <td className={updateCellClass}>{lastOhlcvUpdate || '-'}</td>
               <td className={updateCellClass}></td>
               <td className={updateCellClass}></td>
