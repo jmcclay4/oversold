@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { StockAnalysisResult, OHLCV, LivePrice } from '../types';
 import { ADX_TREND_STRENGTH_THRESHOLD } from '../constants';
@@ -28,10 +29,30 @@ const getPriceColor = (price: number | null | undefined, close: number | null | 
 };
 
 const formatPrice = (price?: number | null) => price != null ? price.toFixed(2) : '-';
-const formatPercent = (percent?: number) => percent !== undefined ? `${percent.toFixed(2)}%` : 'N/A';
+const formatPercent = (price?: number | null, close?: number | null) => {
+  if (price == null || close == null) return '-';
+  return `${((price - close) / close * 100).toFixed(2)}%`;
+};
+
+const formatTimestampToEST = (timestamp?: string): string => {
+  if (!timestamp) return '-';
+  try {
+    const date = new Date(timestamp);
+    return date.toLocaleString('en-US', {
+      timeZone: 'America/New_York',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    });
+  } catch (error) {
+    console.error('Error formatting timestamp:', error);
+    return '-';
+  }
+};
 
 const OhlcvDisplay: React.FC<{ ohlcv?: OHLCV }> = ({ ohlcv }) => {
-  if (!ohlcv) return <span className="text-slate-500">N/A</span>;
+  if (!ohlcv) return <span className="text-slate-500">-</span>;
   return (
     <div className="text-xs text-slate-400">
       <div>O: {ohlcv.open.toFixed(2)} H: {ohlcv.high.toFixed(2)}</div>
@@ -63,9 +84,9 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
             <tr>
               <th scope="col" className={`${headerCellClass} text-center`}>Fav</th>
               <th scope="col" className={headerCellClass}>Ticker</th>
-              <th scope="col" className={headerCellClass}>Price</th>
+              <th scope="col" className={`${headerCellClass} bg-slate-700`}>Price</th>
+              <th scope="col" className={`${headerCellClass} bg-slate-700`}>∆</th>
               <th scope="col" className={headerCellClass}>Close</th>
-              <th scope="col" className={headerCellClass}>∆</th>
               <th scope="col" className={headerCellClass}>ADX</th>
               <th scope="col" className={headerCellClass}>+DI</th>
               <th scope="col" className={headerCellClass}>-DI</th>
@@ -97,35 +118,34 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
                 </td>
                 <td className="px-3 py-3 whitespace-nowrap">
                   <div className={`text-sm font-semibold ${favoriteTickers.has(result.ticker) ? 'text-sky-300' : 'text-slate-100'}`}>{result.ticker}</div>
-                  <div className="text-xs text-slate-400">{result.companyName || 'N/A'}</div>
+                  <div className="text-xs text-slate-400">{result.companyName || '-'}</div>
                 </td>
-                <td className={`px-3 py-3 whitespace-nowrap text-sm ${getPriceColor(livePrices[result.ticker]?.price, result.latestOhlcvDataPoint?.close)}`}>
+                <td className={`px-3 py-3 whitespace-nowrap text-sm bg-slate-700 ${getPriceColor(livePrices[result.ticker]?.price, result.latestOhlcvDataPoint?.close)}`}>
                   {formatPrice(livePrices[result.ticker]?.price)}
+                  {livePrices[result.ticker]?.timestamp != null && (
+                    <div className="text-xs text-slate-400">{formatTimestampToEST(livePrices[result.ticker].timestamp ?? undefined)}</div>
+                  )}
+                </td>
+                <td className="px-3 py-3 whitespace-nowrap text-sm bg-slate-700 text-slate-300">
+                  {formatPercent(livePrices[result.ticker]?.price, result.latestOhlcvDataPoint?.close)}
                 </td>
                 <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-300">
-                  {formatPrice(result.latestPrice)}
-                </td>
-                <td className={`px-3 py-3 whitespace-nowrap text-sm ${
-                  result.percentChange === undefined ? 'text-slate-300' :
-                  result.percentChange > 0 ? 'text-green-400' : 
-                  result.percentChange < 0 ? 'text-red-400' : 'text-slate-300'
-                }`}>
-                  {formatPercent(result.percentChange)}
+                  {formatPrice(result.latestOhlcvDataPoint?.close)}
                 </td>
                 <td className={`px-3 py-3 whitespace-nowrap text-sm ${result.latestIndicators && result.latestIndicators.adx != null && result.latestIndicators.adx > ADX_TREND_STRENGTH_THRESHOLD ? 'text-green-400 font-medium' : 'text-slate-300'}`}>
-                  {result.latestIndicators?.adx != null ? result.latestIndicators.adx.toFixed(2) : 'N/A'}
+                  {result.latestIndicators?.adx != null ? result.latestIndicators.adx.toFixed(2) : '-'}
                 </td>
                 <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-300">
-                  {result.latestIndicators?.pdi != null ? result.latestIndicators.pdi.toFixed(2) : 'N/A'}
+                  {result.latestIndicators?.pdi != null ? result.latestIndicators.pdi.toFixed(2) : '-'}
                 </td>
                 <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-300">
-                  {result.latestIndicators?.mdi != null ? result.latestIndicators.mdi.toFixed(2) : 'N/A'}
+                  {result.latestIndicators?.mdi != null ? result.latestIndicators.mdi.toFixed(2) : '-'}
                 </td>
                 <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-300">
-                  {result.latestIndicators?.k != null ? result.latestIndicators.k.toFixed(2) : 'N/A'}
+                  {result.latestIndicators?.k != null ? result.latestIndicators.k.toFixed(2) : '-'}
                 </td>
                 <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-300">
-                  {result.latestIndicators?.d != null ? result.latestIndicators.d.toFixed(2) : 'N/A'}
+                  {result.latestIndicators?.d != null ? result.latestIndicators.d.toFixed(2) : '-'}
                 </td>
                 <td className="px-3 py-3 whitespace-nowrap">
                   <OhlcvDisplay ohlcv={result.latestOhlcvDataPoint} />

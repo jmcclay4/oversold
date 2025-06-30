@@ -142,7 +142,7 @@ const App: React.FC = () => {
       console.log('Loaded stocks:', results.length, results.slice(0, 3));
       setAllAnalysisResults(results);
       const metadata = await fetchMetadata();
-      setLastOhlcvUpdate(metadata.last_ohlcv_update || 'Unknown');
+      setLastOhlcvUpdate(metadata.last_ohlcv_update ? metadata.last_ohlcv_update.split(' ')[0] : null);
     } catch (error) {
       const errMsg = `Error analyzing stocks: ${(error as Error).message}`;
       console.error(errMsg);
