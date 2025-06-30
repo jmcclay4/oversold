@@ -1,6 +1,7 @@
-cat > requirements.txt << EOF
-fastapi==0.115.2
-uvicorn==0.32.0
-yfinance==0.2.48
-pandas==2.2.3
-numpy==2.1.2
+fastapi
+uvicorn
+yfinance
+pandas
+numpy
+pytz
+requests>=2.31.0
