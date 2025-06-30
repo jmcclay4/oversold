@@ -7,7 +7,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 import uvicorn
-from init_db import init_db, update_data, rebuild_database, fetch_live_prices
+from init_db import init_db, update_data, rebuild_database
 from datetime import datetime
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -101,12 +101,6 @@ class BatchStockDataResponse(BaseModel):
     ticker: str
     company_name: Optional[str]
     latest_ohlcv: Optional[OHLCV]
-
-class LivePriceResponse(BaseModel):
-    ticker: str
-    price: Optional[float]
-    timestamp: Optional[str]
-    volume: Optional[int]
 
 class MetadataResponse(BaseModel):
     last_ohlcv_update: Optional[str]
@@ -223,38 +217,6 @@ async def get_batch_stock_data(tickers: List[str], response: Response):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
-
-@app.get("/live-prices", response_model=List[LivePriceResponse])
-async def get_live_prices(tickers: str, response: Response):
-    logger.info(f"Received live prices request for tickers: {tickers}")
-    response.headers["Cache-Control"] = "no-cache"
-    try:
-        ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
-        if not ticker_list:
-            logger.warning("No valid tickers provided")
-            return []
-        live_data = await fetch_live_prices(ticker_list)
-        if live_data.empty:
-            logger.warning("No live price data returned")
-            return [LivePriceResponse(ticker=t, price=None, timestamp=None, volume=None) for t in ticker_list]
-        results = [
-            LivePriceResponse(
-                ticker=row["ticker"],
-                price=row["price"],
-                timestamp=row["timestamp"],
-                volume=row["volume"]
-            )
-            for _, row in live_data.iterrows()
-        ]
-        ticker_set = set(ticker_list)
-        for ticker in ticker_set:
-            if ticker not in {r.ticker for r in results}:
-                results.append(LivePriceResponse(ticker=ticker, price=None, timestamp=None, volume=None))
-        logger.info(f"Returning live prices for {len(results)} tickers")
-        return results
-    except Exception as e:
-        logger.error(f"Error fetching live prices: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/metadata", response_model=MetadataResponse)
 async def get_metadata(response: Response):
