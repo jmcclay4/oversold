@@ -146,6 +146,7 @@ async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
         }
         base_url = "https://data.alpaca.markets/v2"
         cdt_tz = datetime.now().astimezone().tzinfo
+        logger.info(f"Current time: {cdt_tz}")
         
         async def fetch_batch(batch: List[str]) -> pd.DataFrame:
             try:

@@ -121,7 +121,7 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
               >
                 <td className="px-3 py-3 whitespace-nowrap text-center">
                   <button 
-                    onClick={(e) => { e.stopPropagation(); onToggleFavorite(result.ticker); }}
+                    onClick={(e) => { e.stopPropagation(); onToggleFavorite(result.ticker); onRefreshLivePrices();}}
                     className={`text-2xl ${favoriteTickers.has(result.ticker) ? 'text-yellow-400' : 'text-slate-600 hover:text-yellow-500'} transition-colors`}
                     aria-label={favoriteTickers.has(result.ticker) ? `Unfavorite ${result.ticker}` : `Favorite ${result.ticker}`}
                   >
