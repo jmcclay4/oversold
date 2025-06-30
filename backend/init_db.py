@@ -10,6 +10,7 @@ import aiohttp
 import asyncio
 from typing import List
 from dotenv import load_dotenv
+import pytz
 
 load_dotenv()
 
@@ -145,8 +146,6 @@ async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
             "APCA-API-SECRET-KEY": secret_key
         }
         base_url = "https://data.alpaca.markets/v2"
-        cdt_tz = datetime.now().astimezone().tzinfo
-        logger.info(f"Current time: {cdt_tz}")
         
         async def fetch_batch(batch: List[str]) -> pd.DataFrame:
             try:
@@ -163,6 +162,7 @@ async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
                         logger.info(f"Response data: {data}")
                         quotes = data.get("quotes", {})
                         results = []
+                        est_tz = pytz.timezone('America/New_York')  # Define EST timezone
                         for ticker in batch:
                             quote = quotes.get(ticker, {})
                             timestamp = quote.get("t")
@@ -172,7 +172,11 @@ async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
                                 try:
                                     # Handle high-precision timestamps by truncating to microseconds
                                     timestamp = timestamp[:26] + 'Z' if timestamp.endswith('Z') else timestamp[:26]
-                                    timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00')).astimezone(cdt_tz).strftime('%Y-%m-%d %H:%M:%S')
+                                    # Assume Alpaca timestamp is UTC, convert to EST
+                                    utc_dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                                    est_dt = utc_dt.astimezone(est_tz)
+                                    timestamp = est_dt.strftime('%Y-%m-%d %H:%M:%S')
+                                    logger.info(f"Converted timestamp for {ticker}: UTC {utc_dt} to EST {timestamp}")
                                 except ValueError as e:
                                     logger.warning(f"Invalid timestamp format for {ticker}: {timestamp} - {e}")
                                     timestamp = None
