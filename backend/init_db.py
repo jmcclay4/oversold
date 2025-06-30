@@ -149,7 +149,7 @@ async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
         async def fetch_batch(batch: List[str]) -> pd.DataFrame:
             try:
                 async with aiohttp.ClientSession() as session:
-                    url = f"{base_url}/stocks/quotes/latest?tickers={','.join(batch)}"
+                    url = f"{base_url}/stocks/quotes/latest?symbols={','.join(batch)}"
                     logger.info(f"Sending request to: {url}")
                     async with session.get(url, headers=headers) as response:
                         logger.info(f"Response status: {response.status}")
