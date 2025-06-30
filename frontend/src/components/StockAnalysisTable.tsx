@@ -64,6 +64,7 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
   }
   
   const headerCellClass = "px-3 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider sticky top-0 z-10 bg-slate-900";
+  const updateCellClass = "px-3 py-1 text-[10px] text-left font-medium text-slate-300 uppercase tracking-wider mt-0 bg-slate-900";
 
   return (
     <div className="bg-slate-800 shadow-2xl rounded-xl overflow-hidden mt-6">
@@ -74,13 +75,12 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
               <th scope="col" className={`${headerCellClass} text-center`}>Fav</th>
               <th scope="col" className={headerCellClass}>Ticker</th>
               <th scope="col" className={`${headerCellClass} bg-slate-700`}>
-                Price
                 <button
                   onClick={(e) => { e.stopPropagation(); onRefreshLivePrices(); }}
-                  className="ml-2 px-2 py-1 bg-slate-900 text-slate-300 text-sm rounded hover:bg-slate-700"
+                  className="ml-2 px-1 py-0.5 bg-slate-700 text-slate-300 text-sm rounded hover:bg-slate-900"
                   aria-label="Refresh live prices"
                 >
-                  ⟳
+                  Price ⟳
                 </button>
               </th>
               <th scope="col" className={`${headerCellClass} bg-slate-700`}>∆</th>
@@ -94,18 +94,18 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
               <th scope="col" className={`${headerCellClass} min-w-[200px]`}>Signals</th>
             </tr>
             <tr className="bg-slate-900">
-              <td className={`${headerCellClass} text-center`}></td>
-              <td className={headerCellClass}></td>
-              <td className={`${headerCellClass} bg-slate-700`}>{lastLiveUpdate || '-'}</td>
-              <td className={`${headerCellClass} bg-slate-700`}></td>
-              <td className={headerCellClass}>{lastOhlcvUpdate || '-'}</td>
-              <td className={headerCellClass}></td>
-              <td className={headerCellClass}></td>
-              <td className={headerCellClass}></td>
-              <td className={headerCellClass}></td>
-              <td className={headerCellClass}></td>
-              <td className={`${headerCellClass} min-w-[150px]`}></td>
-              <td className={`${headerCellClass} min-w-[200px]`}></td>
+              <td className={`${updateCellClass} text-center`}></td>
+              <td className={updateCellClass}></td>
+              <td className={`${updateCellClass} bg-slate-700`}>{lastLiveUpdate || '-'}</td>
+              <td className={`${updateCellClass} bg-slate-700`}></td>
+              <td className={updateCellClass}>{lastOhlcvUpdate || '-'}</td>
+              <td className={updateCellClass}></td>
+              <td className={updateCellClass}></td>
+              <td className={updateCellClass}></td>
+              <td className={updateCellClass}></td>
+              <td className={updateCellClass}></td>
+              <td className={`${updateCellClass} min-w-[150px]`}></td>
+              <td className={`${updateCellClass} min-w-[200px]`}></td>
             </tr>
           </thead>
           <tbody className="bg-slate-800 divide-y divide-slate-700">
