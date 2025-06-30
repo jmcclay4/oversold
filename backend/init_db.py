@@ -1,3 +1,4 @@
+
 import sqlite3
 import yfinance as yf
 import pandas as pd
@@ -164,16 +165,21 @@ async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
                         for ticker in batch:
                             quote = quotes.get(ticker, {})
                             timestamp = quote.get("t")
+                            volume = quote.get("v") if quote.get("v") is not None else None
+                            price = quote.get("ap") if quote.get("ap") is not None else None
                             if timestamp:
                                 try:
+                                    # Handle high-precision timestamps by truncating to microseconds
+                                    timestamp = timestamp[:26] + 'Z' if timestamp.endswith('Z') else timestamp[:26]
                                     timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00')).astimezone(cdt_tz).strftime('%Y-%m-%d %H:%M:%S')
-                                except ValueError:
+                                except ValueError as e:
+                                    logger.warning(f"Invalid timestamp format for {ticker}: {timestamp} - {e}")
                                     timestamp = None
                             results.append({
                                 "ticker": ticker,
-                                "price": quote.get("ap"),
+                                "price": price,
                                 "timestamp": timestamp,
-                                "volume": quote.get("v")
+                                "volume": volume
                             })
                         return pd.DataFrame(results)
             except Exception as e:
