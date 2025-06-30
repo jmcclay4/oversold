@@ -63,7 +63,7 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
     return <p className="text-center text-slate-400 py-4">No analysis results to display.</p>;
   }
   
-  const headerCellClass = "px-3 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider sticky top-0 z-10 bg-slate-900";
+  const headerCellClass = "px-3 py-3 pb-0 text-left text-xs font-medium text-slate-300 uppercase tracking-wider sticky top-0 z-10 bg-slate-900";
   const updateCellClass = "px-3 py-1 text-[10px] text-left font-medium text-slate-300 uppercase tracking-wider mt-0 bg-slate-900";
 
   return (
@@ -74,13 +74,13 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
             <tr>
               <th scope="col" className={`${headerCellClass} text-center`}>Fav</th>
               <th scope="col" className={headerCellClass}>Ticker</th>
-              <th scope="col" className={`${headerCellClass} bg-slate-700`}>
+              <th scope="col" className={`${headerCellClass} bg-slate-700 flex justify-start items-center`}>
                 <button
                   onClick={(e) => { e.stopPropagation(); onRefreshLivePrices(); }}
-                  className="ml-2 px-1 py-0.5 bg-slate-700 text-slate-300 text-sm rounded hover:bg-slate-900"
+                  className="px-1 py-0.5 bg-slate-700 text-slate-300 text-sm rounded hover:bg-slate-900"
                   aria-label="Refresh live prices"
                 >
-                  Price ⟳
+                  PRICE ⟳
                 </button>
               </th>
               <th scope="col" className={`${headerCellClass} bg-slate-700`}>∆</th>
