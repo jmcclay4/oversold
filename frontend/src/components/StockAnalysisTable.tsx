@@ -77,7 +77,7 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
               <th scope="col" className={`${headerCellClass} bg-slate-700 flex justify-start items-center`}>
                 <button
                   onClick={(e) => { e.stopPropagation(); onRefreshLivePrices(); }}
-                  className="px-1 py-0.5 bg-slate-700 text-slate-300 text-sm rounded hover:bg-slate-900"
+                  className="px-1 py-0.5 bg-slate-800 text-slate-300 text-sx rounded hover:bg-slate-600"
                   aria-label="Refresh live prices"
                 >
                   PRICE ⟳
@@ -96,8 +96,8 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
             <tr className="bg-slate-900">
               <td className={`${updateCellClass} text-center`}></td>
               <td className={updateCellClass}></td>
-              <td className={`${updateCellClass} bg-slate-700`}>{lastLiveUpdate || '-'}</td>
-              <td className={`${updateCellClass} bg-slate-700`}></td>
+              <td className={`${updateCellClass} bg-slate-700 text-slate-400`}>{lastLiveUpdate || '-'}</td>
+              <td className={`${updateCellClass} bg-slate-700 text-slate-400`}></td>
               <td className={updateCellClass}>{lastOhlcvUpdate || '-'}</td>
               <td className={updateCellClass}></td>
               <td className={updateCellClass}></td>
