@@ -5,7 +5,12 @@ import numpy as np
 import logging
 import os
 from datetime import datetime, timedelta
+import aiohttp
+import asyncio
 from typing import List
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -59,7 +64,6 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
         low = df['low']
         close = df['close']
         
-        # ADX, +DI, -DI
         period = 14
         delta_high = high.diff()
         delta_low = low.diff()
@@ -72,7 +76,6 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
         dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
         adx = dx.rolling(window=period).mean()
         
-        # Stochastic Oscillator
         lowest_low = low.rolling(window=period).min()
         highest_high = high.rolling(window=period).max()
         k = 100 * (close - lowest_low) / (highest_high - lowest_low)
@@ -125,6 +128,61 @@ def fetch_stock_data(tickers: List[str], start_date: str, end_date: str) -> pd.D
     except Exception as e:
         logger.error(f"Error fetching stock data: {e}")
         return pd.DataFrame()
+
+async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
+    logger.info(f"Fetching live prices for {len(tickers)} tickers")
+    try:
+        api_key = os.getenv("ALPACA_API_KEY")
+        secret_key = os.getenv("ALPACA_SECRET_KEY")
+        if not api_key or not secret_key:
+            logger.error("Alpaca API credentials missing")
+            return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in tickers])
+        
+        headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret_key}
+        base_url = "https://data.alpaca.markets/v2"
+        cdt_tz = datetime.now().astimezone().tzinfo
+        
+        async def fetch_batch(batch: List[str]) -> pd.DataFrame:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    url = f"{base_url}/stocks/quotes/latest?tickers={','.join(batch)}"
+                    async with session.get(url, headers=headers) as response:
+                        if response.status != 200:
+                            logger.warning(f"Alpaca API error for batch {batch}: {response.status}")
+                            return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in batch])
+                        data = await response.json()
+                        quotes = data.get("quotes", {})
+                        results = []
+                        for ticker in batch:
+                            quote = quotes.get(ticker, {})
+                            timestamp = quote.get("t")
+                            if timestamp:
+                                try:
+                                    timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00')).astimezone(cdt_tz).strftime('%Y-%m-%d %H:%M:%S')
+                                except ValueError:
+                                    timestamp = None
+                            results.append({
+                                "ticker": ticker,
+                                "price": quote.get("ap"),
+                                "timestamp": timestamp,
+                                "volume": quote.get("v")
+                            })
+                        return pd.DataFrame(results)
+            except Exception as e:
+                logger.error(f"Error fetching batch {batch}: {e}")
+                return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in batch])
+        
+        batch_size = 100
+        batches = [tickers[i:i + batch_size] for i in range(0, len(tickers), batch_size)]
+        tasks = [fetch_batch(batch) for batch in batches]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        final_results = pd.concat([r for r in results if isinstance(r, pd.DataFrame)], ignore_index=True)
+        logger.info(f"Returning live prices for {len(final_results)} tickers")
+        return final_results
+    except Exception as e:
+        logger.error(f"Error fetching live prices: {e}")
+        return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in tickers])
 
 def update_data():
     logger.info("Updating database with new stock data")

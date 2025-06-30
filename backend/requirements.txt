@@ -5,3 +5,5 @@ pandas
 numpy
 pytz
 requests>=2.31.0
+aiohttp
+python-dotenv
