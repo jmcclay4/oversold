@@ -32,41 +32,15 @@ async def lifespan(app: FastAPI):
             conn.close()
             init_db()
             logger.info("Database tables created")
-            rebuild_database()
-            logger.info("Database rebuilt due to missing ohlcv table")
         else:
-            cursor.execute("SELECT COUNT(*) FROM ohlcv")
-            row_count = cursor.fetchone()[0]
-            if row_count == 0:
-                logger.warning("Table 'ohlcv' is empty, triggering rebuild")
-                conn.close()
-                rebuild_database()
-                logger.info("Database rebuilt due to empty ohlcv table")
-            else:
-                cursor.execute("SELECT last_update FROM metadata WHERE key = 'last_ohlcv_update'")
-                result = cursor.fetchone()
-                last_update = result[0] if result else None
-                if last_update:
-                    last_update_dt = datetime.strptime(last_update, "%Y-%m-%d %H:%M:%S")
-                    if (datetime.now() - last_update_dt).days >= 1:
-                        logger.warning(f"Database outdated (last update: {last_update}), updating")
-                        conn.close()
-                        update_data()
-                        logger.info("Database updated on startup")
-                    else:
-                        logger.info("Database is up-to-date")
-                else:
-                    logger.warning("No last_ohlcv_update found, updating database")
-                    conn.close()
-                    update_data()
-                    logger.info("Database updated on startup")
+            logger.info("Database and ohlcv table exist, skipping initialization")
+        yield
     except Exception as e:
         logger.error(f"Error during startup: {e}")
         raise
     finally:
         if 'conn' in locals():
             conn.close()
-    yield
     logger.info("Shutting down FastAPI application")
 
 app = FastAPI(lifespan=lifespan)
