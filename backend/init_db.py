@@ -217,6 +217,7 @@ async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
     except Exception as e:
         logger.error(f"Error fetching live prices: {e}")
         return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in tickers])
+
 def update_data():
     logger.info("Updating database with new stock data")
     try:
@@ -228,22 +229,27 @@ def update_data():
             logger.error("No tickers found, aborting update")
             return
         
-        end_date = datetime.now().strftime('%Y-%m-%d')
+        end_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')  # Include today
         start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+        logger.info(f"Fetching data from {start_date} to {end_date} for {len(tickers)} tickers")
         
         data = fetch_stock_data(tickers, start_date, end_date)
         if data.empty:
             logger.error("No stock data fetched, aborting update")
             return
         
+        logger.info(f"Fetched {len(data)} rows, latest date: {data['date'].max()}")
         grouped = data.groupby('ticker')
+        inserted_rows = 0
         for ticker, group in grouped:
             try:
                 group = calculate_indicators(group)
                 for _, row in group.iterrows():
                     cursor.execute('''
-                        INSERT OR REPLACE INTO ohlcv (ticker, date, open, high, low, close, volume, company_name, adx, pdi, mdi, k, d)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT OR REPLACE INTO ohlcv (
+                            ticker, date, open, high, low, close, volume, 
+                            company_name, adx, pdi, mdi, k, d
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         ticker,
                         row['date'],
@@ -251,22 +257,27 @@ def update_data():
                         row['high'],
                         row['low'],
                         row['close'],
-                        int(row['volume']),
+                        int(row['volume']) if pd.notna(row['volume']) else None,
                         row['company_name'],
-                        row['adx'] if not pd.isna(row['adx']) else None,
-                        row['pdi'] if not pd.isna(row['pdi']) else None,
-                        row['mdi'] if not pd.isna(row['mdi']) else None,
-                        row['k'] if not pd.isna(row['k']) else None,
-                        row['d'] if not pd.isna(row['d']) else None
+                        row['adx'] if pd.notna(row['adx']) else None,
+                        row['pdi'] if pd.notna(row['pdi']) else None,
+                        row['mdi'] if pd.notna(row['mdi']) else None,
+                        row['k'] if pd.notna(row['k']) else None,
+                        row['d'] if pd.notna(row['d']) else None
                     ))
+                    inserted_rows += 1
             except Exception as e:
                 logger.error(f"Error processing ticker {ticker}: {e}")
                 continue
         
+        logger.info(f"Inserted or replaced {inserted_rows} rows into ohlcv table")
+        
+        latest_date = data['date'].max() if not data.empty else datetime.now().strftime('%Y-%m-%d')
         cursor.execute('''
             INSERT OR REPLACE INTO metadata (key, last_update)
             VALUES ('last_ohlcv_update', ?)
-        ''', (datetime.now().strftime('%Y-%m-%d %H:%M:%S'),))
+        ''', (latest_date,))
+        logger.info(f"Updated metadata with last_ohlcv_update: {latest_date}")
         
         conn.commit()
         logger.info("Database updated successfully")
