@@ -93,17 +93,6 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
         logger.error(f"Error calculating indicators: {e}")
         raise
 
-def get_sp500_tickers():
-    logger.info("Fetching S&P 500 tickers")
-    try:
-        table = pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')[0]
-        tickers = table['Symbol'].tolist()
-        logger.info(f"Fetched {len(tickers)} S&P 500 tickers")
-        return [t.replace('.', '-') for t in tickers]
-    except Exception as e:
-        logger.error(f"Error fetching S&P 500 tickers: {e}")
-        return []
-
 def fetch_stock_data(tickers: List[str], start_date: str, end_date: str) -> pd.DataFrame:
     logger.info(f"Fetching stock data for {len(tickers)} tickers from {start_date} to {end_date}")
     try:
@@ -218,16 +207,32 @@ async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
         logger.error(f"Error fetching live prices: {e}")
         return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in tickers])
 
+def get_tracked_tickers():
+    logger.info("Fetching tracked tickers from database")
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT ticker FROM ohlcv")
+        tickers = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        logger.info(f"Fetched {len(tickers)} tracked tickers from database")
+        if not tickers:
+            logger.warning("No tickers found in ohlcv table")
+        return tickers
+    except Exception as e:
+        logger.error(f"Error fetching tracked tickers: {e}")
+        return []
+
 def update_data():
     logger.info("Updating database with new stock data")
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        tickers = get_sp500_tickers()
+        tickers = get_tracked_tickers()
         if not tickers:
-            logger.error("No tickers found, aborting update")
-            return
+            logger.error("No tickers found in database, aborting update")
+            raise ValueError("No tickers found")
         
         end_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')  # Include today
         start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
@@ -236,7 +241,7 @@ def update_data():
         data = fetch_stock_data(tickers, start_date, end_date)
         if data.empty:
             logger.error("No stock data fetched, aborting update")
-            return
+            raise ValueError("No stock data fetched")
         
         logger.info(f"Fetched {len(data)} rows, latest date: {data['date'].max()}")
         grouped = data.groupby('ticker')
@@ -283,7 +288,7 @@ def update_data():
         logger.info("Database updated successfully")
     except Exception as e:
         logger.error(f"Error updating database: {e}")
-        raise
+        raise  # Re-raise to fail the request
     finally:
         conn.close()
 
