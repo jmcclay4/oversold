@@ -12,8 +12,6 @@ from typing import List
 from dotenv import load_dotenv
 import pytz
 
-load_dotenv()
-
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -93,18 +91,52 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
         logger.error(f"Error calculating indicators: {e}")
         raise
 
+def get_tracked_tickers():
+    logger.info("Fetching tracked tickers from database")
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT ticker FROM ohlcv")
+        tickers = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        logger.info(f"Fetched {len(tickers)} tracked tickers from database")
+        if not tickers:
+            logger.warning("No tickers found in ohlcv table")
+        return tickers
+    except Exception as e:
+        logger.error(f"Error fetching tracked tickers: {e}")
+        return []
+
 def fetch_stock_data(tickers: List[str], start_date: str, end_date: str) -> pd.DataFrame:
     logger.info(f"Fetching stock data for {len(tickers)} tickers from {start_date} to {end_date}")
     try:
         data = yf.download(tickers, start=start_date, end=end_date, group_by='ticker', auto_adjust=True, progress=False)
+        logger.info(f"Raw yfinance data shape: {data.shape}, columns: {list(data.columns)}")
+        if data.empty:
+            logger.warning("No data returned from yfinance")
+            return pd.DataFrame()
+        
         if len(tickers) == 1:
             data['ticker'] = tickers[0]
             data = data.reset_index()[['Date', 'ticker', 'Open', 'High', 'Low', 'Close', 'Volume']]
             data.columns = ['date', 'ticker', 'open', 'high', 'low', 'close', 'volume']
         else:
-            data = data.stack(level=0).reset_index().rename(columns={'Date': 'date', 'level_1': 'ticker'})
-            data = data[['date', 'ticker', 'Open', 'High', 'Low', 'Close', 'Volume']]
-            data.columns = ['date', 'ticker', 'open', 'high', 'low', 'close', 'volume']
+            # Handle multi-ticker case with robust column checking
+            if isinstance(data.columns, pd.MultiIndex):
+                logger.info("MultiIndex detected, flattening columns")
+                data = data.stack(future_stack=True).reset_index()
+                if 'ticker' not in data.columns:
+                    data = data.rename(columns={'level_1': 'ticker'})
+                expected_columns = ['Date', 'ticker', 'Open', 'High', 'Low', 'Close', 'Volume']
+                missing_cols = [col for col in expected_columns if col not in data.columns]
+                if missing_cols:
+                    logger.error(f"Missing columns in yfinance data: {missing_cols}")
+                    return pd.DataFrame()
+                data = data[expected_columns]
+                data.columns = ['date', 'ticker', 'open', 'high', 'low', 'close', 'volume']
+            else:
+                logger.warning("Unexpected DataFrame structure from yfinance")
+                return pd.DataFrame()
         
         data['date'] = data['date'].dt.strftime('%Y-%m-%d')
         data['company_name'] = None
@@ -115,6 +147,7 @@ def fetch_stock_data(tickers: List[str], start_date: str, end_date: str) -> pd.D
             except Exception as e:
                 logger.warning(f"Could not fetch company name for {ticker}: {e}")
                 data.loc[data['ticker'] == ticker, 'company_name'] = None
+        logger.info(f"Processed data shape: {data.shape}, latest date: {data['date'].max() if not data.empty else 'N/A'}")
         return data
     except Exception as e:
         logger.error(f"Error fetching stock data: {e}")
@@ -148,13 +181,14 @@ async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
                             logger.warning(f"Attempt {attempt} - Alpaca API error for batch {batch}: {response.status} - {text}")
                             if attempt < 2:
                                 logger.info(f"Retrying batch {batch}")
+                                await asyncio.sleep(0.1)  # 0.1-second delay
                                 return await fetch_batch(batch, attempt + 1)
                             return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in batch])
                         data = await response.json()
                         logger.info(f"Attempt {attempt} - Response data: {data}")
                         quotes = data.get("quotes", {})
                         results = []
-                        est_tz = pytz.timezone('America/New_York')  # Define EST timezone
+                        est_tz = pytz.timezone('America/New_York')
                         for ticker in batch:
                             quote = quotes.get(ticker, {})
                             timestamp = quote.get("t")
@@ -162,18 +196,16 @@ async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
                             price = quote.get("ap") if quote.get("ap") is not None else None
                             if price == 0 or price is None:
                                 logger.warning(f"Invalid price for {ticker}: {price}")
-                                if attempt < 4:
+                                if attempt < 2:
                                     logger.info(f"Retrying {ticker} due to invalid price")
-                                    await asyncio.sleep(0.2)  # 0.1-second delay
+                                    await asyncio.sleep(0.1)  # 0.1-second delay
                                     retry_result = await fetch_batch([ticker], attempt + 1)
                                     if not retry_result.empty and retry_result.iloc[0]["price"] is not None:
                                         results.append(retry_result.iloc[0].to_dict())
                                         continue
                             if timestamp:
                                 try:
-                                    # Handle high-precision timestamps by truncating to microseconds
                                     timestamp = timestamp[:26] + 'Z' if timestamp.endswith('Z') else timestamp[:26]
-                                    # Assume Alpaca timestamp is UTC, convert to EST
                                     utc_dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
                                     est_dt = utc_dt.astimezone(est_tz)
                                     timestamp = est_dt.strftime('%Y-%m-%d %H:%M:%S')
@@ -192,6 +224,7 @@ async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
                 logger.error(f"Attempt {attempt} - Error fetching batch {batch}: {e}")
                 if attempt < 2:
                     logger.info(f"Retrying batch {batch}")
+                    await asyncio.sleep(0.1)  # 0.1-second delay
                     return await fetch_batch(batch, attempt + 1)
                 return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in batch])
         
@@ -206,22 +239,6 @@ async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
     except Exception as e:
         logger.error(f"Error fetching live prices: {e}")
         return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in tickers])
-
-def get_tracked_tickers():
-    logger.info("Fetching tracked tickers from database")
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT ticker FROM ohlcv")
-        tickers = [row[0] for row in cursor.fetchall()]
-        conn.close()
-        logger.info(f"Fetched {len(tickers)} tracked tickers from database")
-        if not tickers:
-            logger.warning("No tickers found in ohlcv table")
-        return tickers
-    except Exception as e:
-        logger.error(f"Error fetching tracked tickers: {e}")
-        return []
 
 def update_data():
     logger.info("Updating database with new stock data")
@@ -288,7 +305,7 @@ def update_data():
         logger.info("Database updated successfully")
     except Exception as e:
         logger.error(f"Error updating database: {e}")
-        raise  # Re-raise to fail the request
+        raise
     finally:
         conn.close()
 
