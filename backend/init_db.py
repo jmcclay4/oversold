@@ -242,7 +242,9 @@ def update_data():
         
         end_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')  # Include today
         if last_update:
-            last_date = datetime.strptime(last_update, '%Y-%m-%d')
+            # Handle possible time in last_update by taking only the date part
+            last_update_date_str = last_update.split()[0] if ' ' in last_update else last_update
+            last_date = datetime.strptime(last_update_date_str, '%Y-%m-%d')
             start_date = (last_date - timedelta(days=30)).strftime('%Y-%m-%d')  # Buffer for indicators
             logger.info(f"Incremental fetch from {start_date} (buffered) to {end_date} for {len(tickers)} tickers")
         else:
@@ -261,7 +263,7 @@ def update_data():
             try:
                 group = calculate_indicators(group)
                 for _, row in group.iterrows():
-                    if last_update and row['date'] <= last_update:
+                    if last_update and row['date'] <= last_update.split()[0]:  # Compare only date part
                         continue  # Skip buffer/old data
                     cursor.execute('''
                         INSERT OR REPLACE INTO ohlcv (
