@@ -22,6 +22,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 DB_PATH = "/data/stocks.db"
+BATCH_SIZE = 50  # Process 50 tickers at a time to reduce memory usage
 
 def init_db():
     logger.info("Initializing database")
@@ -126,12 +127,101 @@ def fetch_historical_from_db(conn, ticker, start_date):
     df['date'] = pd.to_datetime(df['date'])
     return df.set_index('date')
 
+def process_ticker_batch(conn, tickers, api_start_date, db_start_date, latest_date):
+    cursor = conn.cursor()
+    inserted_rows = 0
+    for ticker in tickers:
+        logger.info(f"Processing ticker: {ticker}")
+        try:
+            # Fetch historical from DB if incremental
+            hist_df = pd.DataFrame()
+            if db_start_date:
+                hist_df = fetch_historical_from_db(conn, ticker, db_start_date)
+            
+            # Fetch new data from API
+            new_data = yf.download(ticker, start=api_start_date, end=end_date, auto_adjust=True, progress=False)
+            if new_data.empty:
+                logger.warning(f"No new data from yfinance for {ticker}")
+                continue
+            
+            new_df = new_data.reset_index()
+            new_df['ticker'] = ticker
+            new_df = new_df[['Date', 'ticker', 'Open', 'High', 'Low', 'Close', 'Volume']]
+            new_df.columns = ['date', 'ticker', 'open', 'high', 'low', 'close', 'volume']
+            new_df['date'] = new_df['date'].dt.strftime('%Y-%m-%d')
+            
+            ticker_obj = yf.Ticker(ticker)
+            company_name = ticker_obj.info.get('longName', None)
+            new_df['company_name'] = company_name
+            
+            # Combine hist and new if hist exists
+            if not hist_df.empty:
+                hist_df = hist_df.reset_index()
+                hist_df['date'] = hist_df['date'].dt.strftime('%Y-%m-%d')
+                hist_df['ticker'] = ticker
+                hist_df['company_name'] = company_name
+                combined_df = pd.concat([hist_df, new_df], ignore_index=True).drop_duplicates(subset=['date'])
+            else:
+                combined_df = new_df
+            
+            min_date = combined_df['date'].min()
+            max_date = combined_df['date'].max()
+            logger.info(f"Calculating indicators for {ticker} on dates from {min_date} to {max_date}")
+            
+            combined_df = calculate_indicators(combined_df)
+            
+            # Insert only new rows
+            count = 0
+            for _, row in combined_df.iterrows():
+                if row['date'] > latest_date:
+                    cursor.execute('''
+                        INSERT OR REPLACE INTO ohlcv (
+                            ticker, date, open, high, low, close, volume, 
+                            company_name, adx, pdi, mdi, k, d
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        ticker,
+                        row['date'],
+                        row['open'],
+                        row['high'],
+                        row['low'],
+                        row['close'],
+                        int(row['volume']) if pd.notna(row['volume']) else None,
+                        row['company_name'],
+                        row['adx'] if pd.notna(row['adx']) else None,
+                        row['pdi'] if pd.notna(row['pdi']) else None,
+                        row['mdi'] if pd.notna(row['mdi']) else None,
+                        row['k'] if pd.notna(row['k']) else None,
+                        row['d'] if pd.notna(row['d']) else None
+                    ))
+                    inserted_rows += 1
+                    count += 1
+                    logger.info(f"Added data point for {ticker} on {row['date']}")
+                    if row['date'] > latest_date:
+                        latest_date = row['date']
+            
+            if count > 0:
+                logger.info(f"Added {count} new data points for {ticker}")
+            
+            # Free memory
+            del hist_df, new_df, combined_df
+            gc.collect()
+            
+            time.sleep(1)  # Rate limit
+            
+        except Exception as e:
+            logger.error(f"Error processing ticker {ticker}: {e}")
+            continue
+    
+    conn.commit()  # Commit after batch
+    logger.info(f"Committed batch changes to DB")
+    return inserted_rows, latest_date
+
 def update_data():
     logger.info("Updating database with new stock data")
     conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
         
         tickers = get_tracked_tickers()
         if not tickers and TICKERS:
@@ -141,12 +231,14 @@ def update_data():
             logger.error("No tickers found in database or fallback list, aborting update")
             raise ValueError("No tickers found")
         
+        cursor = conn.cursor()
         cursor.execute("SELECT last_update FROM metadata WHERE key = 'last_ohlcv_update'")
         result = cursor.fetchone()
         last_update = result[0] if result else None
         
+        global end_date
         end_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
-        buffer_days = 30  # Sufficient for ADX (14+14) and Stochastic (14+3), with safety
+        buffer_days = 30  # Sufficient for indicators
         
         if last_update:
             last_update_date_str = last_update.split()[0] if ' ' in last_update else last_update
@@ -162,88 +254,13 @@ def update_data():
         inserted_rows = 0
         latest_date = last_update_date_str if last_update else '1900-01-01'
         
-        for ticker in tickers:
-            logger.info(f"Processing ticker: {ticker}")
-            try:
-                # Fetch historical from DB if incremental
-                hist_df = pd.DataFrame()
-                if db_start_date:
-                    hist_df = fetch_historical_from_db(conn, ticker, db_start_date)
-                
-                # Fetch new data from API
-                new_data = yf.download(ticker, start=api_start_date, end=end_date, auto_adjust=True, progress=False)
-                if new_data.empty:
-                    logger.warning(f"No new data from yfinance for {ticker}")
-                    continue
-                
-                new_df = new_data.reset_index()
-                new_df['ticker'] = ticker
-                new_df = new_df[['Date', 'ticker', 'Open', 'High', 'Low', 'Close', 'Volume']]
-                new_df.columns = ['date', 'ticker', 'open', 'high', 'low', 'close', 'volume']
-                new_df['date'] = new_df['date'].dt.strftime('%Y-%m-%d')
-                
-                ticker_obj = yf.Ticker(ticker)
-                company_name = ticker_obj.info.get('longName', None)
-                new_df['company_name'] = company_name
-                
-                # Combine hist and new if hist exists
-                if not hist_df.empty:
-                    hist_df = hist_df.reset_index()
-                    hist_df['date'] = hist_df['date'].dt.strftime('%Y-%m-%d')
-                    hist_df['ticker'] = ticker
-                    hist_df['company_name'] = company_name
-                    combined_df = pd.concat([hist_df, new_df], ignore_index=True).drop_duplicates(subset=['date'])
-                else:
-                    combined_df = new_df
-                
-                min_date = combined_df['date'].min()
-                max_date = combined_df['date'].max()
-                logger.info(f"Calculating indicators for {ticker} on dates from {min_date} to {max_date}")
-                
-                combined_df = calculate_indicators(combined_df)
-                
-                # Insert only new rows
-                count = 0
-                for _, row in combined_df.iterrows():
-                    if row['date'] > latest_date:
-                        cursor.execute('''
-                            INSERT OR REPLACE INTO ohlcv (
-                                ticker, date, open, high, low, close, volume, 
-                                company_name, adx, pdi, mdi, k, d
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ''', (
-                            ticker,
-                            row['date'],
-                            row['open'],
-                            row['high'],
-                            row['low'],
-                            row['close'],
-                            int(row['volume']) if pd.notna(row['volume']) else None,
-                            row['company_name'],
-                            row['adx'] if pd.notna(row['adx']) else None,
-                            row['pdi'] if pd.notna(row['pdi']) else None,
-                            row['mdi'] if pd.notna(row['mdi']) else None,
-                            row['k'] if pd.notna(row['k']) else None,
-                            row['d'] if pd.notna(row['d']) else None
-                        ))
-                        inserted_rows += 1
-                        count += 1
-                        logger.info(f"Added data point for {ticker} on {row['date']}")
-                        if row['date'] > latest_date:
-                            latest_date = row['date']
-                
-                if count > 0:
-                    logger.info(f"Added {count} new data points for {ticker}")
-                
-                # Free memory
-                del hist_df, new_df, combined_df
-                gc.collect()
-                
-                time.sleep(1)  # Rate limit
-                
-            except Exception as e:
-                logger.error(f"Error processing ticker {ticker}: {e}")
-                continue
+        # Process in batches
+        for i in range(0, len(tickers), BATCH_SIZE):
+            batch_tickers = tickers[i:i + BATCH_SIZE]
+            logger.info(f"Processing batch {i//BATCH_SIZE + 1}: {len(batch_tickers)} tickers")
+            batch_inserted, latest_date = process_ticker_batch(conn, batch_tickers, api_start_date, db_start_date, latest_date)
+            inserted_rows += batch_inserted
+            gc.collect()  # Extra GC after batch
         
         logger.info(f"Inserted or replaced {inserted_rows} rows into ohlcv table")
         
@@ -251,9 +268,9 @@ def update_data():
             INSERT OR REPLACE INTO metadata (key, last_update)
             VALUES ('last_ohlcv_update', ?)
         ''', (latest_date,))
+        conn.commit()
         logger.info(f"Updated metadata with last_ohlcv_update: {latest_date}")
         
-        conn.commit()
         logger.info("Database updated successfully")
     except Exception as e:
         logger.error(f"Error updating database: {e}")
