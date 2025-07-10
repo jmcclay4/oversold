@@ -1,4 +1,3 @@
- 
 import sqlite3
 import yfinance as yf
 import pandas as pd
@@ -11,6 +10,7 @@ import asyncio
 from typing import List
 from dotenv import load_dotenv
 import pytz
+import time  # Added for rate limiting
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -109,49 +109,34 @@ def get_tracked_tickers():
 
 def fetch_stock_data(tickers: List[str], start_date: str, end_date: str) -> pd.DataFrame:
     logger.info(f"Fetching stock data for {len(tickers)} tickers from {start_date} to {end_date}")
-    try:
-        data = yf.download(tickers, start=start_date, end=end_date, group_by='ticker', auto_adjust=True, progress=False)
-        logger.info(f"Raw yfinance data shape: {data.shape}, columns: {list(data.columns)}")
-        if data.empty:
-            logger.warning("No data returned from yfinance")
-            return pd.DataFrame()
-        
-        if len(tickers) == 1:
-            data['ticker'] = tickers[0]
-            data = data.reset_index()[['Date', 'ticker', 'Open', 'High', 'Low', 'Close', 'Volume']]
+    all_data = []
+    for ticker in tickers:
+        try:
+            data = yf.download(ticker, start=start_date, end=end_date, auto_adjust=True, progress=False)
+            if data.empty:
+                logger.warning(f"No data returned from yfinance for {ticker}")
+                continue
+            
+            data = data.reset_index()
+            data['ticker'] = ticker
+            data = data[['Date', 'ticker', 'Open', 'High', 'Low', 'Close', 'Volume']]
             data.columns = ['date', 'ticker', 'open', 'high', 'low', 'close', 'volume']
-        else:
-            # Handle multi-ticker case with robust column checking
-            if isinstance(data.columns, pd.MultiIndex):
-                logger.info("MultiIndex detected, flattening columns")
-                data = data.stack(future_stack=True).reset_index()
-                if 'ticker' not in data.columns:
-                    data = data.rename(columns={'level_1': 'ticker'})
-                expected_columns = ['Date', 'ticker', 'Open', 'High', 'Low', 'Close', 'Volume']
-                missing_cols = [col for col in expected_columns if col not in data.columns]
-                if missing_cols:
-                    logger.error(f"Missing columns in yfinance data: {missing_cols}")
-                    return pd.DataFrame()
-                data = data[expected_columns]
-                data.columns = ['date', 'ticker', 'open', 'high', 'low', 'close', 'volume']
-            else:
-                logger.warning("Unexpected DataFrame structure from yfinance")
-                return pd.DataFrame()
-        
-        data['date'] = data['date'].dt.strftime('%Y-%m-%d')
-        data['company_name'] = None
-        for ticker in tickers:
-            try:
-                ticker_obj = yf.Ticker(ticker)
-                data.loc[data['ticker'] == ticker, 'company_name'] = ticker_obj.info.get('longName', None)
-            except Exception as e:
-                logger.warning(f"Could not fetch company name for {ticker}: {e}")
-                data.loc[data['ticker'] == ticker, 'company_name'] = None
-        logger.info(f"Processed data shape: {data.shape}, latest date: {data['date'].max() if not data.empty else 'N/A'}")
-        return data
-    except Exception as e:
-        logger.error(f"Error fetching stock data: {e}")
-        return pd.DataFrame()
+            data['date'] = data['date'].dt.strftime('%Y-%m-%d')
+            
+            ticker_obj = yf.Ticker(ticker)
+            company_name = ticker_obj.info.get('longName', None)
+            data['company_name'] = company_name
+            
+            all_data.append(data)
+            time.sleep(0.5)  # Rate limit to prevent blocks
+        except Exception as e:
+            logger.error(f"Error fetching data for {ticker}: {e}")
+    
+    if all_data:
+        combined_data = pd.concat(all_data, ignore_index=True)
+        logger.info(f"Processed data shape: {combined_data.shape}, latest date: {combined_data['date'].max() if not combined_data.empty else 'N/A'}")
+        return combined_data
+    return pd.DataFrame()
 
 async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
     logger.info(f"Fetching live prices for {len(tickers)} tickers: {tickers}")
@@ -251,9 +236,18 @@ def update_data():
             logger.error("No tickers found in database, aborting update")
             raise ValueError("No tickers found")
         
+        cursor.execute("SELECT last_update FROM metadata WHERE key = 'last_ohlcv_update'")
+        result = cursor.fetchone()
+        last_update = result[0] if result else None
+        
         end_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')  # Include today
-        start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
-        logger.info(f"Fetching data from {start_date} to {end_date} for {len(tickers)} tickers")
+        if last_update:
+            last_date = datetime.strptime(last_update, '%Y-%m-%d')
+            start_date = (last_date - timedelta(days=30)).strftime('%Y-%m-%d')  # Buffer for indicators
+            logger.info(f"Incremental fetch from {start_date} (buffered) to {end_date} for {len(tickers)} tickers")
+        else:
+            start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+            logger.info(f"Initial full fetch from {start_date} to {end_date} for {len(tickers)} tickers")
         
         data = fetch_stock_data(tickers, start_date, end_date)
         if data.empty:
@@ -267,6 +261,8 @@ def update_data():
             try:
                 group = calculate_indicators(group)
                 for _, row in group.iterrows():
+                    if last_update and row['date'] <= last_update:
+                        continue  # Skip buffer/old data
                     cursor.execute('''
                         INSERT OR REPLACE INTO ohlcv (
                             ticker, date, open, high, low, close, volume, 
