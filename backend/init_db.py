@@ -11,6 +11,12 @@ from typing import List
 from dotenv import load_dotenv
 import pytz
 import time  # For rate limiting
+import gc  # For manual garbage collection
+
+try:
+    from sp500_tickers import TICKERS
+except ImportError:
+    TICKERS = []  # Replace with your list of S&P 500 tickers if the import fails
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -100,8 +106,6 @@ def get_tracked_tickers():
         tickers = [row[0] for row in cursor.fetchall()]
         conn.close()
         logger.info(f"Fetched {len(tickers)} tracked tickers from database")
-        if not tickers:
-            logger.warning("No tickers found in ohlcv table")
         return tickers
     except Exception as e:
         logger.error(f"Error fetching tracked tickers: {e}")
@@ -130,8 +134,11 @@ def update_data():
         cursor = conn.cursor()
         
         tickers = get_tracked_tickers()
+        if not tickers and TICKERS:
+            tickers = TICKERS
+            logger.info(f"Using fallback TICKERS list with {len(tickers)} tickers for initial update")
         if not tickers:
-            logger.error("No tickers found in database, aborting update")
+            logger.error("No tickers found in database or fallback list, aborting update")
             raise ValueError("No tickers found")
         
         cursor.execute("SELECT last_update FROM metadata WHERE key = 'last_ohlcv_update'")
@@ -139,7 +146,7 @@ def update_data():
         last_update = result[0] if result else None
         
         end_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
-        buffer_days = 44  # 14*3 +2 for safety (ADX needs 14+14, Stoch 14)
+        buffer_days = 30  # Sufficient for ADX (14+14) and Stochastic (14+3), with safety
         
         if last_update:
             last_update_date_str = last_update.split()[0] if ' ' in last_update else last_update
@@ -149,13 +156,14 @@ def update_data():
             logger.info(f"Incremental update: DB buffer from {db_start_date}, API from {api_start_date} to {end_date}")
         else:
             api_start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
-            db_start_date = None  # No DB data for initial
+            db_start_date = None
             logger.info(f"Initial full fetch from {api_start_date} to {end_date}")
         
         inserted_rows = 0
         latest_date = last_update_date_str if last_update else '1900-01-01'
         
         for ticker in tickers:
+            logger.info(f"Processing ticker: {ticker}")
             try:
                 # Fetch historical from DB if incremental
                 hist_df = pd.DataFrame()
@@ -183,15 +191,19 @@ def update_data():
                     hist_df = hist_df.reset_index()
                     hist_df['date'] = hist_df['date'].dt.strftime('%Y-%m-%d')
                     hist_df['ticker'] = ticker
-                    hist_df['company_name'] = company_name  # Assume consistent
+                    hist_df['company_name'] = company_name
                     combined_df = pd.concat([hist_df, new_df], ignore_index=True).drop_duplicates(subset=['date'])
                 else:
                     combined_df = new_df
                 
-                # Calculate indicators on combined
+                min_date = combined_df['date'].min()
+                max_date = combined_df['date'].max()
+                logger.info(f"Calculating indicators for {ticker} on dates from {min_date} to {max_date}")
+                
                 combined_df = calculate_indicators(combined_df)
                 
                 # Insert only new rows
+                count = 0
                 for _, row in combined_df.iterrows():
                     if row['date'] > latest_date:
                         cursor.execute('''
@@ -215,10 +227,19 @@ def update_data():
                             row['d'] if pd.notna(row['d']) else None
                         ))
                         inserted_rows += 1
+                        count += 1
+                        logger.info(f"Added data point for {ticker} on {row['date']}")
                         if row['date'] > latest_date:
                             latest_date = row['date']
                 
-                time.sleep(1)  # Increased rate limit to 1s per ticker
+                if count > 0:
+                    logger.info(f"Added {count} new data points for {ticker}")
+                
+                # Free memory
+                del hist_df, new_df, combined_df
+                gc.collect()
+                
+                time.sleep(1)  # Rate limit
                 
             except Exception as e:
                 logger.error(f"Error processing ticker {ticker}: {e}")
@@ -254,7 +275,89 @@ def rebuild_database():
         logger.error(f"Error rebuilding database: {e}")
         raise
 
-# Note: fetch_live_prices remains unchanged, as it's not part of the update_data flow causing memory issues.
 async def fetch_live_prices(tickers: List[str]) -> pd.DataFrame:
-    # [Original code for fetch_live_prices here, unchanged]
-    pass  # Placeholder; copy the original function body if needed
+    logger.info(f"Fetching live prices for {len(tickers)} tickers: {tickers}")
+    try:
+        api_key = os.getenv("ALPACA_API_KEY")
+        secret_key = os.getenv("ALPACA_SECRET_KEY")
+        logger.info(f"API Key present: {bool(api_key)}, Secret Key present: {bool(secret_key)}")
+        if not api_key or not secret_key:
+            logger.error("Alpaca API credentials missing")
+            return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in tickers])
+        
+        headers = {
+            "APCA-API-KEY-ID": api_key,
+            "APCA-API-SECRET-KEY": secret_key
+        }
+        base_url = "https://data.alpaca.markets/v2"
+        
+        async def fetch_batch(batch: List[str], attempt: int = 1) -> pd.DataFrame:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    url = f"{base_url}/stocks/quotes/latest?symbols={','.join(batch)}"
+                    logger.info(f"Attempt {attempt} - Sending request to: {url}")
+                    async with session.get(url, headers=headers) as response:
+                        logger.info(f"Attempt {attempt} - Response status: {response.status}")
+                        if response.status != 200:
+                            text = await response.text()
+                            logger.warning(f"Attempt {attempt} - Alpaca API error for batch {batch}: {response.status} - {text}")
+                            if attempt < 2:
+                                logger.info(f"Retrying batch {batch}")
+                                await asyncio.sleep(0.1)  # 0.1-second delay
+                                return await fetch_batch(batch, attempt + 1)
+                            return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in batch])
+                        data = await response.json()
+                        logger.info(f"Attempt {attempt} - Response data: {data}")
+                        quotes = data.get("quotes", {})
+                        results = []
+                        est_tz = pytz.timezone('America/New_York')
+                        for ticker in batch:
+                            quote = quotes.get(ticker, {})
+                            timestamp = quote.get("t")
+                            volume = quote.get("v") if quote.get("v") is not None else None
+                            price = quote.get("ap") if quote.get("ap") is not None else None
+                            if price == 0 or price is None:
+                                logger.warning(f"Invalid price for {ticker}: {price}")
+                                if attempt < 2:
+                                    logger.info(f"Retrying {ticker} due to invalid price")
+                                    await asyncio.sleep(0.1)  # 0.1-second delay
+                                    retry_result = await fetch_batch([ticker], attempt + 1)
+                                    if not retry_result.empty and retry_result.iloc[0]["price"] is not None:
+                                        results.append(retry_result.iloc[0].to_dict())
+                                        continue
+                            if timestamp:
+                                try:
+                                    timestamp = timestamp[:26] + 'Z' if timestamp.endswith('Z') else timestamp[:26]
+                                    utc_dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                                    est_dt = utc_dt.astimezone(est_tz)
+                                    timestamp = est_dt.strftime('%Y-%m-%d %H:%M:%S')
+                                    logger.info(f"Converted timestamp for {ticker}: UTC {utc_dt} to EST {timestamp}")
+                                except ValueError as e:
+                                    logger.warning(f"Invalid timestamp format for {ticker}: {timestamp} - {e}")
+                                    timestamp = None
+                            results.append({
+                                "ticker": ticker,
+                                "price": price,
+                                "timestamp": timestamp,
+                                "volume": volume
+                            })
+                        return pd.DataFrame(results)
+            except Exception as e:
+                logger.error(f"Attempt {attempt} - Error fetching batch {batch}: {e}")
+                if attempt < 2:
+                    logger.info(f"Retrying batch {batch}")
+                    await asyncio.sleep(0.1)  # 0.1-second delay
+                    return await fetch_batch(batch, attempt + 1)
+                return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in batch])
+        
+        batch_size = 100
+        batches = [tickers[i:i + batch_size] for i in range(0, len(tickers), batch_size)]
+        tasks = [fetch_batch(batch) for batch in batches]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        final_results = pd.concat([r for r in results if isinstance(r, pd.DataFrame)], ignore_index=True)
+        logger.info(f"Returning live prices for {len(final_results)} tickers")
+        return final_results
+    except Exception as e:
+        logger.error(f"Error fetching live prices: {e}")
+        return pd.DataFrame([{"ticker": t, "price": None, "timestamp": None, "volume": None} for t in tickers])
