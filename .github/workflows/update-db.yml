@@ -1,13 +1,47 @@
+# .github/workflows/update-db.yml
+# This workflow runs daily to update the database.
+# Since the DB is on Fly.io volume, the action still curls the endpoint.
+# To offload compute, we could run the script here, but since DB persistence is on Fly, 
+# it's better to keep the curl for now. If memory issues persist, consider committing DB to repo (if small) or use Fly API to upload snapshots.
 name: Update Database
 
 on:
   schedule:
     - cron: '30 20 * * *'  # Runs at 4:30PM Central
+  workflow_dispatch:  # Allow manual trigger
 
 jobs:
   update-db:
     runs-on: ubuntu-latest
     steps:
-    - name: Trigger database update
-      run: |
-        curl -X POST https://oversold-backend.fly.dev/update-db
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      
+      - name: Run database update script
+        run: python backend/init_db.py  # Assuming init_db.py has a main to call update_data()
+      
+      - name: Commit and push DB changes if any
+        run: |
+          git config --local user.email "actions@github.com"
+          git config --local user.name "GitHub Actions"
+          git add data/stocks.db || echo "No DB file"
+          git commit -m "Daily DB update" || echo "No changes to commit"
+          git push
+      
+      - name: Trigger Fly.io deployment if needed
+        uses: benc-uk/workflow-dispatch@v1
+        with:
+          workflow: deploy.yml  # Assuming a separate deploy workflow
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Trigger backend update via curl (fallback)
+        run: |
+          curl -X POST https://oversold-backend.fly.dev/update-db
