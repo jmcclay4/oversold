@@ -5,12 +5,13 @@
 # Key changes for optimization and fixes:
 # - Assumes uniform last update date across all tickers (from metadata table).
 # - Processes tickers in small batches (BATCH_SIZE=10) to reduce memory usage.
-# - Within each batch, fetches new data using yfinance.download for the batch.
-# - Handles cases where yfinance returns non-MultiIndex DF (e.g., if some tickers have no data).
+# - Within each batch, fetches new data using yfinance.download for the batch with auto_adjust=False to avoid column issues.
+# - Uses 'Adj Close' as 'close', drops 'Close' (unadjusted).
+# - Handles cases where yfinance returns non-MultiIndex DF or missing columns gracefully (logs and skips if invalid).
 # - Fetches buffer historical data per batch from DB.
 # - Concatenates buffer + new data, calculates indicators per ticker group.
 # - Inserts only new rows (dates > initial last_update).
-# - Commits after each batch to persist changes and release resources.
+# - Commits after each batch.
 # - Uses astype(float32) for numeric columns to halve memory usage.
 # - Added detailed logging for each step, including when data points are added.
 # - Garbage collection after each batch.
@@ -179,8 +180,9 @@ def update_data():
     Updates the database with new stock data since the last update.
     - Assumes uniform last update date across all tickers (from metadata).
     - Processes tickers in small batches to keep memory low.
-    - Per batch: Fetches buffer data from DB, new data from yfinance.
-    - Handles yfinance DF structure (MultiIndex or flat).
+    - Per batch: Fetches buffer data from DB, new data from yfinance with auto_adjust=False.
+    - Uses 'Adj Close' as 'close', drops 'Close'.
+    - Handles if columns are missing (logs DF columns and skips batch).
     - Concatenates, calculates indicators per ticker.
     - Inserts only new rows (dates > initial last_update).
     - Commits after each batch.
@@ -196,7 +198,7 @@ def update_data():
         # Get list of tickers
         tickers = get_tracked_tickers()
         if not tickers:
-            raise ValueError("No tickers available for update")
+            raise ValueValue("No tickers available for update")
         
         # Get the last uniform update date from metadata
         cursor.execute("SELECT last_update FROM metadata WHERE key = 'last_ohlcv_update'")
@@ -243,9 +245,9 @@ def update_data():
                 buffer_df = buffer_df.astype({'open': 'float32', 'high': 'float32', 'low': 'float32', 'close': 'float32', 'volume': 'int32'})
                 logger.info(f"Fetched buffer DF with {len(buffer_df)} rows for batch")
             
-            # Step 2: Fetch new data from yfinance for the batch
+            # Step 2: Fetch new data from yfinance for the batch with auto_adjust=False
             logger.info(f"Fetching new data from yfinance for batch from {api_start_date} to {end_date}")
-            new_data = yf.download(batch_tickers, start=api_start_date, end=end_date, auto_adjust=True, progress=False)
+            new_data = yf.download(batch_tickers, start=api_start_date, end=end_date, auto_adjust=False, progress=False)
             if new_data.empty:
                 logger.warning(f"No new data returned from yfinance for batch {batch_tickers}")
                 continue
@@ -257,24 +259,24 @@ def update_data():
                 new_data = new_data.rename(columns={'level_1': 'ticker'})
                 logger.info("Handled MultiIndex DF from yfinance")
             else:
-                # Single-ticker or unexpected flat DF
+                # Single-ticker or flat DF
                 if len(batch_tickers) == 1:
                     new_data = new_data.reset_index()
                     new_data['ticker'] = batch_tickers[0]
                     logger.info(f"Handled single-ticker DF for {batch_tickers[0]}")
                 else:
-                    # Unexpected: log error and skip batch
                     logger.error(f"Unexpected non-MultiIndex DF for multiple tickers {batch_tickers}; skipping batch")
                     continue
             
-            # Select and rename columns
-            if set(['Date', 'Open', 'High', 'Low', 'Close', 'Volume', 'ticker']).issubset(new_data.columns):
-                new_data = new_data[['Date', 'ticker', 'Open', 'High', 'Low', 'Close', 'Volume']]
+            # Select and rename columns, using 'Adj Close' as 'close'
+            expected_columns = ['Date', 'ticker', 'Open', 'High', 'Low', 'Adj Close', 'Volume']
+            if set(expected_columns).issubset(new_data.columns):
+                new_data = new_data[expected_columns]
                 new_data.columns = ['date', 'ticker', 'open', 'high', 'low', 'close', 'volume']
                 new_data['date'] = new_data['date'].dt.strftime('%Y-%m-%d')
                 new_data = new_data.astype({'open': 'float32', 'high': 'float32', 'low': 'float32', 'close': 'float32', 'volume': 'int32'})
             else:
-                logger.error(f"Missing expected columns in new_data for batch {batch_tickers}; skipping")
+                logger.error(f"Missing expected columns in new_data for batch {batch_tickers}. Actual columns: {list(new_data.columns)}; skipping")
                 continue
             
             # Add company_name (fetch for batch)
