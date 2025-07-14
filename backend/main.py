@@ -198,37 +198,46 @@ async def get_batch_stock_data(tickers: List[str], response: Response):
     finally:
         conn.close()
 
-@app.get("/live-prices", response_model=List[LivePriceResponse])
-async def get_live_prices(tickers: str, response: Response):
-    logger.info(f"Received live prices request for tickers: {tickers}")
-    response.headers["Cache-Control"] = "no-cache"
-    try:
-        ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
-        if not ticker_list:
-            logger.warning("No valid tickers provided")
-            return []
-        live_data = await fetch_live_prices(ticker_list)
-        if live_data.empty:
-            logger.warning("No live price data returned")
-            return [LivePriceResponse(ticker=t, price=None, timestamp=None, volume=None) for t in ticker_list]
-        results = [
-            LivePriceResponse(
-                ticker=row["ticker"],
-                price=row["price"],
-                timestamp=row["timestamp"],
-                volume=row["volume"]
-            )
-            for _, row in live_data.iterrows()
-        ]
-        ticker_set = set(ticker_list)
-        for ticker in ticker_set:
-            if ticker not in {r.ticker for r in results}:
-                results.append(LivePriceResponse(ticker=ticker, price=None, timestamp=None, volume=None))
-        logger.info(f"Returning live prices for {len(results)} tickers")
-        return results
-    except Exception as e:
-        logger.error(f"Error fetching live prices: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+@app.get("/live-prices")
+async def get_live_prices(tickers: str = Query(...)):
+    logger.info(f"Received request for live prices: {tickers}")
+    ticker_list = [t.strip().upper() for t in tickers.split(',') if t.strip()]
+    if not ticker_list:
+        raise HTTPException(status_code=400, detail="No tickers provided")
+    
+    results = []
+    est_tz = pytz.timezone('America/New_York')
+    
+    for ticker in ticker_list:
+        try:
+            tick = yf.Ticker(ticker)
+            info = tick.info
+            price = info.get('regularMarketPrice')
+            timestamp_unix = info.get('regularMarketTime')
+            volume = info.get('regularMarketVolume')
+            
+            timestamp = None
+            if timestamp_unix:
+                utc_dt = datetime.fromtimestamp(timestamp_unix)
+                est_dt = utc_dt.astimezone(est_tz)
+                timestamp = est_dt.strftime('%Y-%m-%d %H:%M:%S')
+            
+            results.append({
+                "ticker": ticker,
+                "price": price,
+                "timestamp": timestamp,
+                "volume": volume
+            })
+        except Exception as e:
+            logger.warning(f"Error fetching live price for {ticker}: {e}")
+            results.append({
+                "ticker": ticker,
+                "price": None,
+                "timestamp": None,
+                "volume": None
+            })
+    
+    return results
 
 @app.get("/metadata", response_model=MetadataResponse)
 async def get_metadata(response: Response):

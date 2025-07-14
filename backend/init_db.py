@@ -380,7 +380,7 @@ def update_data():
             logger.info(f"Committed changes for batch, total inserted so far: {inserted_rows}")
         
         # Update metadata to MIN of all tickers' MAX(date) for frontend (overall "up to" date)
-        if inserted_rows > 0:
+        
             logger.info("Calculating min max date across all tickers for metadata")
             cursor.execute("""
                 SELECT MIN(last_date) FROM (SELECT MAX(date) as last_date FROM ohlcv GROUP BY ticker)
