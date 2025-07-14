@@ -484,3 +484,12 @@ async def get_live_prices(tickers: str = Query(...)):
             })
     
     return results
+
+@app.post("/update-db")
+async def manual_update_db():
+    try:
+        update_data()
+        return {"message": "Database update triggered successfully"}
+    except Exception as e:
+        logger.error(f"Error during manual database update: {e}")
+        raise HTTPException(status_code=500, detail="Error updating database")
