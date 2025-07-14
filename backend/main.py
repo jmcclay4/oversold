@@ -1,202 +1,448 @@
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import sqlite3
+import pandas as pd
+import yfinance as yf
+from datetime import datetime, timedelta
+import pytz
 import logging
+from typing import List, Dict
+import gc
 import os
-from typing import List, Optional
-from pydantic import BaseModel
-from contextlib import asynccontextmanager
-import uvicorn
-from init_db import init_db, update_data, rebuild_database, fetch_live_prices
-from datetime import datetime
+import numpy as np
+import time
+import importlib
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Import S&P 500 tickers for initial population or fallback
+SP500_TICKERS = []  # Replace with actual list or import from sp500_tickers.py
+
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+app = FastAPI()
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 DB_PATH = "/data/stocks.db"
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    logger.info("Starting FastAPI application")
+BUFFER_DAYS = 30
+BATCH_SIZE = 10
+YF_RETRY_COUNT = 3
+YF_RETRY_SLEEP = 5  # seconds
+
+def init_db():
+    """
+    Initializes the SQLite database with two tables:
+    - 'ohlcv': Stores stock data (ticker, date, OHLCV, company name, indicators).
+    - 'metadata': Stores key-value pairs (e.g., last_ohlcv_update date).
+    Called on app startup if DB or tables are missing.
+    """
+    logger.info("Initializing database")
     try:
-        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-        if not os.path.exists(DB_PATH):
-            logger.warning(f"Database file {DB_PATH} not found, initializing")
-            init_db()
-            logger.info(f"Database initialized at {DB_PATH}")
+        # Connect to database (creates file if not exists)
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ohlcv'")
-        if not cursor.fetchone():
-            logger.warning("Table 'ohlcv' does not exist, initializing database")
-            conn.close()
-            init_db()
-            logger.info("Database tables created")
-        else:
-            logger.info("Database and ohlcv table exist, skipping initialization")
-        yield
+        
+        # Create ohlcv table with PRIMARY KEY to prevent duplicate ticker-date entries
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ohlcv (
+                ticker TEXT,
+                date TEXT,
+                open REAL,
+                high REAL,
+                low REAL,
+                close REAL,
+                volume INTEGER,
+                company_name TEXT,
+                adx REAL,
+                pdi REAL,
+                mdi REAL,
+                k REAL,
+                d REAL,
+                PRIMARY KEY (ticker, date)
+            )
+        ''')
+        
+        # Create metadata table for tracking overall last update (min max date across tickers)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS metadata (
+                key TEXT PRIMARY KEY,
+                last_update TEXT
+            )
+        ''')
+        
+        # Commit changes to save table creation
+        conn.commit()
+        logger.info("Database tables created successfully")
     except Exception as e:
-        logger.error(f"Error during startup: {e}")
+        logger.error(f"Error initializing database: {e}")
         raise
     finally:
-        if 'conn' in locals():
-            conn.close()
-    logger.info("Shutting down FastAPI application")
+        conn.close()
 
-app = FastAPI(lifespan=lifespan)
+def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calculates technical indicators for a DataFrame:
+    - ADX (Average Directional Index, 14-day)
+    - +DI (Plus Directional Indicator, 14-day)
+    - -DI (Minus Directional Indicator, 14-day)
+    - Stochastic %K (14-day) and %D (3-day SMA of %K)
+    Uses pandas rolling operations on small DFs (~40 rows/ticker).
+    Converts outputs to float32 for memory efficiency.
+    Expects lowercase columns: 'open', 'high', 'low', 'close', 'volume'.
+    """
+    logger.info(f"Calculating technical indicators for DF with {len(df)} rows")
+    try:
+        # Extract price series (lowercase columns)
+        high = df['high']
+        low = df['low']
+        close = df['close']
+        
+        # Define period for indicators
+        period = 14
+        
+        # Calculate True Range (TR): max of high-low, |high-prev_close|, |low-prev_close|
+        delta_high = high.diff()
+        delta_low = low.diff()
+        tr = pd.concat([high - low, abs(high - close.shift()), abs(low - close.shift())], axis=1).max(axis=1)
+        atr = tr.rolling(window=period).mean()
+        
+        # Calculate Directional Movement (+DM, -DM)
+        plus_dm = delta_high.where(delta_high > 0, 0)
+        minus_dm = abs(delta_low.where(delta_low > 0, 0))
+        
+        # Calculate +DI and -DI (directional indicators)
+        plus_di = 100 * plus_dm.rolling(window=period).mean() / atr
+        minus_di = 100 * minus_dm.rolling(window=period).mean() / atr
+        
+        # Calculate DX and ADX (trend strength)
+        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+        adx = dx.rolling(window=period).mean()
+        
+        # Calculate Stochastic %K and %D
+        lowest_low = low.rolling(window=period).min()
+        highest_high = high.rolling(window=period).max()
+        k = 100 * (close - lowest_low) / (highest_high - lowest_low)
+        d = k.rolling(window=3).mean()
+        
+        # Assign indicators to DF, using float32 to save memory
+        df['adx'] = adx.astype('float32') if adx.notnull().any() else np.nan
+        df['pdi'] = plus_di.astype('float32') if plus_di.notnull().any() else np.nan
+        df['mdi'] = minus_di.astype('float32') if minus_di.notnull().any() else np.nan
+        df['k'] = k.astype('float32') if k.notnull().any() else np.nan
+        df['d'] = d.astype('float32') if d.notnull().any() else np.nan
+        
+        return df
+    except Exception as e:
+        logger.error(f"Error calculating indicators: {e}")
+        raise
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173", "https://oversold.jmcclay.com", "https://*.vercel.app"],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"],
-    expose_headers=["Access-Control-Allow-Origin"]
-)
-
-class OHLCV(BaseModel):
-    date: str
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: int
-    company_name: Optional[str]
-    adx: Optional[float]
-    pdi: Optional[float]
-    mdi: Optional[float]
-    k: Optional[float]
-    d: Optional[float]
-
-class StockDataResponse(BaseModel):
-    ohlcv: List[OHLCV]
-
-class BatchStockDataResponse(BaseModel):
-    ticker: str
-    company_name: Optional[str]
-    latest_ohlcv: Optional[OHLCV]
-
-class LivePriceResponse(BaseModel):
-    ticker: str
-    price: Optional[float]
-    timestamp: Optional[str]
-    volume: Optional[int]
-
-class MetadataResponse(BaseModel):
-    last_ohlcv_update: Optional[str]
-
-@app.get("/stocks/tickers", response_model=List[str])
-async def get_all_tickers():
-    logger.info("Received request for all tickers")
+def get_tracked_tickers():
+    """
+    Retrieves unique tickers from the ohlcv table.
+    If none exist (e.g., initial run), returns the TICKERS list from sp500_tickers.py.
+    """
+    logger.info("Fetching tracked tickers from database")
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT ticker FROM ohlcv ORDER BY ticker")
+        cursor.execute("SELECT DISTINCT ticker FROM ohlcv")
         tickers = [row[0] for row in cursor.fetchall()]
-        logger.info(f"Returning {len(tickers)} tickers")
+        conn.close()
+        logger.info(f"Fetched {len(tickers)} tracked tickers from database")
+        if not tickers:
+            tickers = SP500_TICKERS
+            logger.info(f"No tickers in DB, using fallback list with {len(tickers)} tickers")
         return tickers
     except Exception as e:
-        logger.error(f"Error fetching tickers: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
+        logger.error(f"Error fetching tracked tickers: {e}")
+        return SP500_TICKERS
 
-@app.get("/stocks/{ticker}", response_model=StockDataResponse)
-async def get_stock_data(ticker: str):
-    logger.info(f"Received request for ticker: {ticker}")
+def get_last_date_for_ticker(conn, ticker):
+    """
+    Queries the MAX(date) for a specific ticker from ohlcv table.
+    Returns the date as str, or None if no data.
+    """
+    cursor = conn.cursor()
+    cursor.execute("SELECT MAX(date) FROM ohlcv WHERE ticker = ?", (ticker,))
+    result = cursor.fetchone()[0]
+    return result if result else None
+
+def update_data():
+    """
+    Updates the ohlcv table with new stock data, checking last date per ticker.
+    - Fetches all tickers (471 per logs, from DB or TICKERS).
+    - Queries last dates for all tickers in one go, identifies stale ones (last_date < current_date or no data).
+    - Processes only stale tickers in batches.
+    - Per ticker: Fetches buffer, new data, etc.
+    - At end, updates metadata to MIN(MAX(date) per ticker) for frontend.
+    """
+    logger.info("Updating database with new stock data")
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
+        
+        # Get all tickers
+        all_tickers = get_tracked_tickers()
+        if not all_tickers:
+            raise ValueError("No tickers available for update")
+        
+        # End date for all fetches (tomorrow to include today, since end is exclusive)
+        end_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+        current_date = datetime.now().strftime('%Y-%m-%d')
+        
+        # Get last dates for all tickers
+        logger.info("Fetching last dates for all tickers")
+        df_last = pd.read_sql("SELECT ticker, MAX(date) as last_date FROM ohlcv GROUP BY ticker", conn)
+        df_all = pd.DataFrame({'ticker': all_tickers})
+        df_last = df_all.merge(df_last, on='ticker', how='left')
+        df_last['last_date'] = df_last['last_date'].fillna('1900-01-01')
+        
+        # Identify stale tickers (last_date < current_date)
+        stale_tickers = df_last[df_last['last_date'] < current_date]['ticker'].tolist()
+        if not stale_tickers:
+            logger.info("All tickers are up to date; no updates needed")
+            # Still update metadata even if no updates
+            logger.info("Calculating min max date across all tickers for metadata")
+            cursor.execute("""
+                SELECT MIN(last_date) FROM (SELECT MAX(date) as last_date FROM ohlcv GROUP BY ticker)
+            """)
+            min_max_date = cursor.fetchone()[0]
+            if min_max_date:
+                cursor.execute('''
+                    INSERT OR REPLACE INTO metadata (key, last_update)
+                    VALUES ('last_ohlcv_update', ?)
+                ''', (min_max_date,))
+                conn.commit()
+                logger.info(f"Updated metadata with last_ohlcv_update: {min_max_date}")
+            else:
+                logger.warning("No min max date found; metadata not updated")
+            return
+        
+        logger.info(f"Found {len(stale_tickers)} stale tickers to update: {', '.join(stale_tickers)}")
+        
+        # Track overall inserted rows
+        inserted_rows = 0
+        
+        # Process stale tickers in batches
+        for i in range(0, len(stale_tickers), BATCH_SIZE):
+            batch_tickers = stale_tickers[i:i + BATCH_SIZE]
+            logger.info(f"Processing batch {i//BATCH_SIZE + 1}: {len(batch_tickers)} tickers ({', '.join(batch_tickers)})")
+            
+            for ticker in batch_tickers:
+                logger.info(f"Processing ticker {ticker} in batch")
+                try:
+                    # Get last date (from df_last)
+                    last_date_str = df_last[df_last['ticker'] == ticker]['last_date'].values[0]
+                    last_date = datetime.strptime(last_date_str, '%Y-%m-%d')
+                    api_start_date = (last_date + timedelta(days=1)).strftime('%Y-%m-%d')
+                    db_start_date = (last_date - timedelta(days=BUFFER_DAYS)).strftime('%Y-%m-%d')
+                    logger.info(f"Incremental for {ticker}: DB buffer from {db_start_date}, API from {api_start_date} to {end_date}")
+                    
+                    # This should not happen since we filtered, but check
+                    if api_start_date >= end_date:
+                        logger.info(f"No new data needed for {ticker} (up to date as of {last_date_str})")
+                        time.sleep(0.5)
+                        continue
+                    
+                    # Step 1: Fetch buffer data from DB
+                    buffer_df = pd.DataFrame()
+                    logger.info(f"Fetching buffer data from DB for {ticker} since {db_start_date}")
+                    query = """
+                        SELECT date, open, high, low, close, volume, company_name
+                        FROM ohlcv
+                        WHERE ticker = ? AND date >= ?
+                        ORDER BY date
+                    """
+                    buffer_df = pd.read_sql_query(query, conn, params=(ticker, db_start_date))
+                    buffer_df = buffer_df.astype({'open': 'float32', 'high': 'float32', 'low': 'float32', 'close': 'float32', 'volume': 'int32'})
+                    buffer_df['ticker'] = ticker  # Add ticker column
+                    logger.info(f"Fetched buffer DF with {len(buffer_df)} rows for {ticker}")
+                    
+                    # Step 2: Fetch new data from yfinance with retry
+                    new_data = None
+                    for attempt in range(1, YF_RETRY_COUNT + 1):
+                        try:
+                            logger.info(f"Fetching new data from yfinance for {ticker} (attempt {attempt})")
+                            new_data = yf.download(ticker, start=api_start_date, end=end_date, auto_adjust=False, progress=False)
+                            if not new_data.empty:
+                                break
+                        except Exception as e:
+                            logger.warning(f"yfinance error for {ticker} on attempt {attempt}: {e}")
+                            if attempt < YF_RETRY_COUNT:
+                                time.sleep(YF_RETRY_SLEEP)
+                            else:
+                                logger.error(f"Failed to fetch data for {ticker} after {YF_RETRY_COUNT} attempts")
+                                break
+                    
+                    if new_data is None or new_data.empty:
+                        logger.warning(f"No new data for {ticker}, skipping")
+                        time.sleep(0.5)
+                        continue
+                    
+                    # Flatten if MultiIndex
+                    if isinstance(new_data.columns, pd.MultiIndex):
+                        new_data = new_data.droplevel(1, axis=1)
+                        logger.info(f"Droplevel MultiIndex columns for {ticker}")
+                    
+                    # Handle DF structure
+                    new_data = new_data.reset_index()
+                    new_data['ticker'] = ticker
+                    available_columns = set(new_data.columns)
+                    logger.info(f"yfinance returned columns for {ticker}: {list(available_columns)}")
+                    expected_columns = ['Date', 'ticker', 'Open', 'High', 'Low', 'Adj Close', 'Volume']
+                    if set(expected_columns).issubset(available_columns):
+                        new_data = new_data[expected_columns]
+                        new_data.columns = ['date', 'ticker', 'open', 'high', 'low', 'close', 'volume']
+                        new_data['date'] = new_data['date'].dt.strftime('%Y-%m-%d')
+                        new_data = new_data.astype({'open': 'float32', 'high': 'float32', 'low': 'float32', 'close': 'float32', 'volume': 'int32'})
+                    else:
+                        logger.error(f"Missing expected columns for {ticker}. Required: {expected_columns}, Actual: {list(available_columns)}; skipping")
+                        continue
+                    
+                    # Add company name
+                    try:
+                        company_name = yf.Ticker(ticker).info.get('longName', ticker)
+                    except:
+                        company_name = ticker
+                    new_data['company_name'] = company_name
+                    logger.info(f"Fetched new DF with {len(new_data)} rows for {ticker}")
+                    
+                    # Step 3: Concat buffer and new data
+                    if not buffer_df.empty:
+                        buffer_df['company_name'] = company_name
+                        combined_df = pd.concat([buffer_df, new_data], ignore_index=True).drop_duplicates(subset=['date'])
+                    else:
+                        combined_df = new_data
+                    combined_df = combined_df.sort_values('date')
+                    logger.info(f"Combined DF with {len(combined_df)} rows for {ticker}")
+                    
+                    # Step 4: Calculate indicators
+                    min_date = combined_df['date'].min()
+                    max_date = combined_df['date'].max()
+                    logger.info(f"Calculating indicators for {ticker} on dates from {min_date} to {max_date}")
+                    combined_df = calculate_indicators(combined_df)
+                    
+                    # Step 5: Insert new rows
+                    count = 0
+                    ticker_max_date = last_date_str
+                    for _, row in combined_df.iterrows():
+                        if row['date'] > ticker_max_date:
+                            cursor.execute('''
+                                INSERT OR REPLACE INTO ohlcv (
+                                    ticker, date, open, high, low, close, volume, 
+                                    company_name, adx, pdi, mdi, k, d
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ''', (
+                                ticker,
+                                row['date'],
+                                row['open'],
+                                row['high'],
+                                row['low'],
+                                row['close'],
+                                int(row['volume']) if pd.notna(row['volume']) else None,
+                                row['company_name'],
+                                row['adx'] if pd.notna(row['adx']) else None,
+                                row['pdi'] if pd.notna(row['pdi']) else None,
+                                row['mdi'] if pd.notna(row['mdi']) else None,
+                                row['k'] if pd.notna(row['k']) else None,
+                                row['d'] if pd.notna(row['d']) else None
+                            ))
+                            count += 1
+                            logger.info(f"Added data point for {ticker} on {row['date']}")
+                            if row['date'] > ticker_max_date:
+                                ticker_max_date = row['date']
+                    if count > 0:
+                        logger.info(f"Added {count} new data points for {ticker}")
+                    inserted_rows += count
+                    
+                    # Free memory per ticker
+                    del combined_df
+                    gc.collect()
+                    
+                    time.sleep(0.5)  # Short sleep to avoid rate limiting
+                    
+                except Exception as e:
+                    logger.error(f"Error processing ticker {ticker}: {e}")
+                    continue
+            
+            # Commit batch changes
+            conn.commit()
+            logger.info(f"Committed changes for batch, total inserted so far: {inserted_rows}")
+        
+        # Update metadata to MIN of all tickers' MAX(date) for frontend (overall "up to" date)
+        logger.info("Calculating min max date across all tickers for metadata")
         cursor.execute("""
-            SELECT date, open, high, low, close, volume, company_name, adx, pdi, mdi, k, d
-            FROM ohlcv
-            WHERE ticker = ?
-            ORDER BY date
-        """, (ticker.upper(),))
-        rows = cursor.fetchall()
-        if not rows:
-            logger.warning(f"No data found for ticker {ticker}")
-            raise HTTPException(status_code=404, detail=f"No data found for ticker {ticker}")
-        ohlcv_data = [
-            OHLCV(
-                date=row[0],
-                open=row[1],
-                high=row[2],
-                low=row[3],
-                close=row[4],
-                volume=row[5],
-                company_name=row[6],
-                adx=row[7],
-                pdi=row[8],
-                mdi=row[9],
-                k=row[10],
-                d=row[11]
-            )
-            for row in rows
-        ]
-        logger.info(f"Returning {len(ohlcv_data)} data points for {ticker}")
-        return StockDataResponse(ohlcv=ohlcv_data)
+            SELECT MIN(last_date) FROM (SELECT MAX(date) as last_date FROM ohlcv GROUP BY ticker)
+        """)
+        min_max_date = cursor.fetchone()[0]
+        if min_max_date:
+            cursor.execute('''
+                INSERT OR REPLACE INTO metadata (key, last_update)
+                VALUES ('last_ohlcv_update', ?)
+            ''', (min_max_date,))
+            conn.commit()
+            logger.info(f"Updated metadata with last_ohlcv_update: {min_max_date}")
+        else:
+            logger.warning("No min max date found; metadata not updated")
+        
+        logger.info(f"Total inserted or replaced {inserted_rows} rows into ohlcv table")
+        logger.info("Database updated successfully")
     except Exception as e:
-        logger.error(f"Error fetching data for {ticker}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error updating database: {e}")
+        raise
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
-@app.post("/stocks/batch", response_model=List[BatchStockDataResponse])
-async def get_batch_stock_data(tickers: List[str], response: Response):
-    logger.info(f"Received batch request for {len(tickers)} tickers")
-    response.headers["Cache-Control"] = "no-cache"
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        placeholders = ','.join(['?' for _ in tickers])
-        query = f"""
-            SELECT ticker, date, open, high, low, close, volume, company_name, adx, pdi, mdi, k, d
-            FROM ohlcv
-            WHERE ticker IN ({placeholders})
-            AND date = (
-                SELECT MAX(date)
-                FROM ohlcv
-                WHERE ticker = ohlcv.ticker
-            )
-        """
-        cursor.execute(query, [t.upper() for t in tickers])
-        rows = cursor.fetchall()
-        ticker_set = set(t.upper() for t in tickers)
-        results = []
-        for row in rows:
-            results.append(BatchStockDataResponse(
-                ticker=row[0],
-                company_name=row[7],
-                latest_ohlcv=OHLCV(
-                    date=row[1],
-                    open=row[2],
-                    high=row[3],
-                    low=row[4],
-                    close=row[5],
-                    volume=row[6],
-                    company_name=row[7],
-                    adx=row[8],
-                    pdi=row[9],
-                    mdi=row[10],
-                    k=row[11],
-                    d=row[12]
-                )
-            ))
-        for ticker in ticker_set:
-            if ticker not in {r.ticker for r in results}:
-                results.append(BatchStockDataResponse(
-                    ticker=ticker,
-                    company_name=None,
-                    latest_ohlcv=None
-                ))
-        logger.info(f"Returning data for {len(results)} tickers")
-        return results
-    except Exception as e:
-        logger.error(f"Error fetching batch data: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
+@app.get("/stocks/tickers")
+async def get_tickers():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT ticker FROM ohlcv")
+    tickers = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return tickers
+
+@app.get("/stocks/{ticker}")
+async def get_stock_data(ticker: str):
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query("SELECT * FROM ohlcv WHERE ticker = ? ORDER BY date", conn, params=(ticker.upper(),))
+    conn.close()
+    if df.empty:
+        return {"error": f"No data for {ticker}"}
+    return {"ohlcv": df.to_dict(orient="records")}
+
+@app.post("/stocks/batch")
+async def get_batch_stock_data(tickers: List[str]):
+    conn = sqlite3.connect(DB_PATH)
+    results = []
+    for ticker in tickers:
+        df = pd.read_sql_query("SELECT * FROM ohlcv WHERE ticker = ? ORDER BY date DESC LIMIT 1", conn, params=(ticker.upper(),))
+        if df.empty:
+            results.append({"ticker": ticker, "latest_ohlcv": None})
+        else:
+            latest = df.iloc[0].to_dict()
+            results.append({"ticker": ticker, "latest_ohlcv": latest, "company_name": latest.get("company_name")})
+    conn.close()
+    return results
+
+@app.get("/metadata")
+async def get_metadata():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT last_update FROM metadata WHERE key = 'last_ohlcv_update'")
+    result = cursor.fetchone()
+    conn.close()
+    return {"last_ohlcv_update": result[0] if result else None}
 
 @app.get("/live-prices")
 async def get_live_prices(tickers: str = Query(...)):
@@ -238,52 +484,3 @@ async def get_live_prices(tickers: str = Query(...)):
             })
     
     return results
-
-@app.get("/metadata", response_model=MetadataResponse)
-async def get_metadata(response: Response):
-    logger.info("Received request for metadata")
-    response.headers["Cache-Control"] = "no-cache"
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT last_update FROM metadata WHERE key = 'last_ohlcv_update'")
-        result = cursor.fetchone()
-        last_update = result[0] if result else None
-        logger.info(f"Returning last OHLCV update: {last_update}")
-        if last_update is None:
-            logger.warning("No last_ohlcv_update found in metadata table")
-        return MetadataResponse(last_ohlcv_update=last_update)
-    except sqlite3.Error as e:
-        logger.error(f"Database error fetching metadata: {e}")
-        return MetadataResponse(last_ohlcv_update=None)
-    except Exception as e:
-        logger.error(f"Unexpected error fetching metadata: {e}")
-        return MetadataResponse(last_ohlcv_update=None)
-    finally:
-        conn.close()
-
-@app.post("/update-db")
-async def update_database():
-    logger.info("Received request to update database")
-    try:
-        update_data()
-        logger.info("Database update completed successfully")
-        return {"status": "success", "message": "Database updated"}
-    except Exception as e:
-        logger.error(f"Error updating database: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update database: {str(e)}")
-
-@app.post("/rebuild-db")
-async def rebuild_database_endpoint():
-    logger.info("Received request to rebuild database")
-    try:
-        rebuild_database()
-        logger.info("Database rebuild completed successfully")
-        return {"status": "success", "message": "Database rebuilt with S&P 500 data"}
-    except Exception as e:
-        logger.error(f"Error rebuilding database: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to rebuild database: {str(e)}")
-
-if __name__ == "__main__":
-    logger.info("Starting Uvicorn server")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
