@@ -4,10 +4,11 @@
 # Key features:
 # - Initializes tables for OHLCV and metadata.
 # - Updates data incrementally, checking last date per ticker (MAX(date) query).
-# - Processes tickers in batches (BATCH_SIZE=10) to minimize memory usage on Fly.io (256MB limit).
+# - First collects list of stale tickers (last_date < current_date or no data).
+# - Processes only stale tickers in batches (BATCH_SIZE=10) to minimize memory usage on Fly.io (256MB limit).
 # - Per ticker: Fetches buffer (30 days before last date) from DB, new data from yfinance (from last_date+1 to today+1).
 # - Skips if api_start_date >= end_date (no new data needed, avoids yfinance error for future dates).
-# - Flattens columns if MultiIndex from yfinance.
+# - Flattens columns if MultiIndex from yfinance using droplevel(1).
 # - Concatenates, calculates indicators, inserts new rows.
 # - Commits after each batch to persist changes and free resources.
 # - Logs every step (buffer fetch, yfinance fetch, column names, data points added).
@@ -193,19 +194,11 @@ def get_last_date_for_ticker(conn, ticker):
 def update_data():
     """
     Updates the ohlcv table with new stock data, checking last date per ticker.
-    - Fetches tickers (471 per logs, from DB or TICKERS).
-    - For each batch (10 tickers):
-      - Queries last date per ticker in batch.
-      - Per ticker: Sets api_start_date = last_date +1 or full year if none.
-      - If api_start_date >= end_date, skips (no new data needed).
-      - Fetches buffer (from last_date - BUFFER_DAYS) from DB.
-      - Fetches new data from yfinance with retry on errors.
-      - Flattens columns if MultiIndex.
-      - Concatenates, sorts, calculates indicators, inserts new rows.
-    - Commits after each batch to persist changes and free memory.
+    - Fetches all tickers (471 per logs, from DB or TICKERS).
+    - Queries last dates for all tickers in one go, identifies stale ones (last_date < current_date or no data).
+    - Processes only stale tickers in batches.
+    - Per ticker: Fetches buffer, new data, etc.
     - At end, updates metadata to MIN(MAX(date) per ticker) for frontend.
-    - Skips non-trading days (yfinance returns empty for weekends/holidays).
-    - Uses float32 for memory efficiency.
     """
     logger.info("Updating database with new stock data")
     conn = None
@@ -213,63 +206,67 @@ def update_data():
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Get tickers (471 per logs)
-        tickers = get_tracked_tickers()
-        if not tickers:
+        # Get all tickers
+        all_tickers = get_tracked_tickers()
+        if not all_tickers:
             raise ValueError("No tickers available for update")
         
         # End date for all fetches (tomorrow to include today, since end is exclusive)
         end_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
         current_date = datetime.now().strftime('%Y-%m-%d')
         
-        # Track overall inserted rows and min max date for metadata
-        inserted_rows = 0
-        all_max_dates = []
+        # Get last dates for all tickers
+        logger.info("Fetching last dates for all tickers")
+        df_last = pd.read_sql("SELECT ticker, MAX(date) as last_date FROM ohlcv GROUP BY ticker", conn)
+        df_all = pd.DataFrame({'ticker': all_tickers})
+        df_last = df_all.merge(df_last, on='ticker', how='left')
+        df_last['last_date'] = df_last['last_date'].fillna('1900-01-01')
         
-        # Process tickers in batches
-        for i in range(0, len(tickers), BATCH_SIZE):
-            batch_tickers = tickers[i:i + BATCH_SIZE]
+        # Identify stale tickers (last_date < current_date)
+        stale_tickers = df_last[df_last['last_date'] < current_date]['ticker'].tolist()
+        if not stale_tickers:
+            logger.info("All tickers are up to date; no updates needed")
+            return
+        
+        logger.info(f"Found {len(stale_tickers)} stale tickers to update: {', '.join(stale_tickers)}")
+        
+        # Track overall inserted rows
+        inserted_rows = 0
+        
+        # Process stale tickers in batches
+        for i in range(0, len(stale_tickers), BATCH_SIZE):
+            batch_tickers = stale_tickers[i:i + BATCH_SIZE]
             logger.info(f"Processing batch {i//BATCH_SIZE + 1}: {len(batch_tickers)} tickers ({', '.join(batch_tickers)})")
-            
-            batch_inserted = 0
-            batch_max_dates = []
             
             for ticker in batch_tickers:
                 logger.info(f"Processing ticker {ticker} in batch")
                 try:
-                    # Get last date for this ticker
-                    last_date_str = get_last_date_for_ticker(conn, ticker)
-                    if last_date_str:
-                        last_date = datetime.strptime(last_date_str, '%Y-%m-%d')
-                        api_start_date = (last_date + timedelta(days=1)).strftime('%Y-%m-%d')
-                        db_start_date = (last_date - timedelta(days=BUFFER_DAYS)).strftime('%Y-%m-%d')
-                        logger.info(f"Incremental for {ticker}: DB buffer from {db_start_date}, API from {api_start_date} to {end_date}")
-                    else:
-                        api_start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
-                        db_start_date = None
-                        logger.info(f"Initial full fetch for {ticker} from {api_start_date} to {end_date}")
+                    # Get last date (from df_last)
+                    last_date_str = df_last[df_last['ticker'] == ticker]['last_date'].values[0]
+                    last_date = datetime.strptime(last_date_str, '%Y-%m-%d')
+                    api_start_date = (last_date + timedelta(days=1)).strftime('%Y-%m-%d')
+                    db_start_date = (last_date - timedelta(days=BUFFER_DAYS)).strftime('%Y-%m-%d')
+                    logger.info(f"Incremental for {ticker}: DB buffer from {db_start_date}, API from {api_start_date} to {end_date}")
                     
-                    # Skip if no new data possible (start >= end)
+                    # This should not happen since we filtered, but check
                     if api_start_date >= end_date:
                         logger.info(f"No new data needed for {ticker} (up to date as of {last_date_str})")
-                        batch_max_dates.append(last_date_str or current_date)
                         time.sleep(0.5)
                         continue
                     
                     # Step 1: Fetch buffer data from DB
                     buffer_df = pd.DataFrame()
-                    if db_start_date:
-                        logger.info(f"Fetching buffer data from DB for {ticker} since {db_start_date}")
-                        query = """
-                            SELECT date, open, high, low, close, volume, company_name
-                            FROM ohlcv
-                            WHERE ticker = ? AND date >= ?
-                            ORDER BY date
-                        """
-                        buffer_df = pd.read_sql_query(query, conn, params=(ticker, db_start_date))
-                        buffer_df = buffer_df.astype({'open': 'float32', 'high': 'float32', 'low': 'float32', 'close': 'float32', 'volume': 'int32'})
-                        buffer_df['ticker'] = ticker  # Add ticker column
-                        logger.info(f"Fetched buffer DF with {len(buffer_df)} rows for {ticker}")
+                    logger.info(f"Fetching buffer data from DB for {ticker} since {db_start_date}")
+                    query = """
+                        SELECT date, open, high, low, close, volume, company_name
+                        FROM ohlcv
+                        WHERE ticker = ? AND date >= ?
+                        ORDER BY date
+                    """
+                    buffer_df = pd.read_sql_query(query, conn, params=(ticker, db_start_date))
+                    buffer_df = buffer_df.astype({'open': 'float32', 'high': 'float32', 'low': 'float32', 'close': 'float32', 'volume': 'int32'})
+                    buffer_df['ticker'] = ticker  # Add ticker column
+                    logger.info(f"Fetched buffer DF with {len(buffer_df)} rows for {ticker}")
                     
                     # Step 2: Fetch new data from yfinance with retry
                     new_data = None
@@ -289,16 +286,15 @@ def update_data():
                     
                     if new_data is None or new_data.empty:
                         logger.warning(f"No new data for {ticker}, skipping")
-                        batch_max_dates.append(last_date_str or current_date)
                         time.sleep(0.5)
                         continue
                     
-                    # Flatten columns if MultiIndex
+                    # Flatten if MultiIndex
                     if isinstance(new_data.columns, pd.MultiIndex):
-                        new_data.columns = new_data.columns.get_level_values(0)
-                        logger.info(f"Flattened MultiIndex columns for {ticker}")
+                        new_data = new_data.droplevel(1, axis=1)
+                        logger.info(f"Droplevel MultiIndex columns for {ticker}")
                     
-                    # Handle DF structure (single ticker)
+                    # Handle DF structure
                     new_data = new_data.reset_index()
                     new_data['ticker'] = ticker
                     available_columns = set(new_data.columns)
@@ -338,7 +334,7 @@ def update_data():
                     
                     # Step 5: Insert new rows
                     count = 0
-                    ticker_max_date = last_date_str or '1900-01-01'
+                    ticker_max_date = last_date_str
                     for _, row in combined_df.iterrows():
                         if row['date'] > ticker_max_date:
                             cursor.execute('''
@@ -368,7 +364,6 @@ def update_data():
                     if count > 0:
                         logger.info(f"Added {count} new data points for {ticker}")
                     inserted_rows += count
-                    batch_max_dates.append(ticker_max_date)
                     
                     # Free memory per ticker
                     del combined_df
