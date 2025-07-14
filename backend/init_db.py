@@ -5,7 +5,8 @@
 # - Initializes tables for OHLCV and metadata.
 # - Updates data incrementally, checking last date per ticker (MAX(date) query).
 # - Processes tickers in batches (BATCH_SIZE=10) to minimize memory usage on Fly.io (256MB limit).
-# - Per ticker: Fetches buffer (30 days before last date) from DB, new data from yfinance (from last_date+1 to today).
+# - Per ticker: Fetches buffer (30 days before last date) from DB, new data from yfinance (from last_date+1 to today+1).
+# - Skips if api_start_date >= end_date (no new data needed, avoids yfinance error for future dates).
 # - Concatenates, calculates indicators, inserts new rows.
 # - Commits after each batch to persist changes and free resources.
 # - Logs every step (buffer fetch, yfinance fetch, column names, data points added).
@@ -14,7 +15,6 @@
 # - Standardized all column names to lowercase for consistency.
 # - Added retry for yfinance.download (up to 3 attempts on timeout/errors).
 # - At end, updates metadata to MIN(MAX(date) per ticker) for frontend consistency.
-# - No uniform assumption; each ticker updated independently.
 
 import sqlite3
 import yfinance as yf
@@ -196,6 +196,7 @@ def update_data():
     - For each batch (10 tickers):
       - Queries last date per ticker in batch.
       - Per ticker: Sets api_start_date = last_date +1 or full year if none.
+      - If api_start_date >= end_date, skips (no new data needed).
       - Fetches buffer (from last_date - BUFFER_DAYS) from DB.
       - Fetches new data from yfinance with retry on errors.
       - Concatenates, sorts, calculates indicators, inserts new rows.
@@ -215,8 +216,9 @@ def update_data():
         if not tickers:
             raise ValueError("No tickers available for update")
         
-        # End date for all fetches (up to today)
+        # End date for all fetches (tomorrow to include today, since end is exclusive)
         end_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+        current_date = datetime.now().strftime('%Y-%m-%d')
         
         # Track overall inserted rows and min max date for metadata
         inserted_rows = 0
@@ -245,6 +247,13 @@ def update_data():
                         db_start_date = None
                         logger.info(f"Initial full fetch for {ticker} from {api_start_date} to {end_date}")
                     
+                    # Skip if no new data possible (start >= end)
+                    if api_start_date >= end_date:
+                        logger.info(f"No new data needed for {ticker} (up to date as of {last_date_str})")
+                        batch_max_dates.append(last_date_str)
+                        time.sleep(0.5)
+                        continue
+                    
                     # Step 1: Fetch buffer data from DB
                     buffer_df = pd.DataFrame()
                     if db_start_date:
@@ -269,7 +278,7 @@ def update_data():
                             if not new_data.empty:
                                 break
                         except Exception as e:
-                            logger.warning(f" yfinance error for {ticker} on attempt {attempt}: {e}")
+                            logger.warning(f"yfinance error for {ticker} on attempt {attempt}: {e}")
                             if attempt < YF_RETRY_COUNT:
                                 time.sleep(YF_RETRY_SLEEP)
                             else:
@@ -278,6 +287,8 @@ def update_data():
                     
                     if new_data is None or new_data.empty:
                         logger.warning(f"No new data for {ticker}, skipping")
+                        batch_max_dates.append(last_date_str or current_date)
+                        time.sleep(0.5)
                         continue
                     
                     # Handle DF structure (single ticker, no MultiIndex)
