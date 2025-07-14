@@ -182,7 +182,7 @@ def update_data():
     - Queries last dates for all tickers in one go, identifies stale ones (last_date < current_date or no data).
     - Processes only stale tickers in batches.
     - Per ticker: Fetches buffer, new data, etc.
-    - At end, updates metadata to MIN(MAX(date) per ticker) for frontend.
+    - At end, updates metadata to MAX(MAX(date) per ticker) for frontend.
     """
     logger.info("Updating database with new stock data")
     conn = None
@@ -211,20 +211,20 @@ def update_data():
         if not stale_tickers:
             logger.info("All tickers are up to date; no updates needed")
             # Still update metadata even if no updates
-            logger.info("Calculating min max date across all tickers for metadata")
+            logger.info("Calculating max max date across all tickers for metadata")
             cursor.execute("""
-                SELECT MIN(last_date) FROM (SELECT MAX(date) as last_date FROM ohlcv GROUP BY ticker)
+                SELECT MAX(last_date) FROM (SELECT MAX(date) as last_date FROM ohlcv GROUP BY ticker)
             """)
-            min_max_date = cursor.fetchone()[0]
-            if min_max_date:
+            max_max_date = cursor.fetchone()[0]
+            if max_max_date:
                 cursor.execute('''
                     INSERT OR REPLACE INTO metadata (key, last_update)
                     VALUES ('last_ohlcv_update', ?)
-                ''', (min_max_date,))
+                ''', (max_max_date,))
                 conn.commit()
-                logger.info(f"Updated metadata with last_ohlcv_update: {min_max_date}")
+                logger.info(f"Updated metadata with last_ohlcv_update: {max_max_date}")
             else:
-                logger.warning("No min max date found; metadata not updated")
+                logger.warning("No max max date found; metadata not updated")
             return
         
         logger.info(f"Found {len(stale_tickers)} stale tickers to update: {', '.join(stale_tickers)}")
@@ -378,21 +378,21 @@ def update_data():
             conn.commit()
             logger.info(f"Committed changes for batch, total inserted so far: {inserted_rows}")
         
-        # Update metadata to MIN of all tickers' MAX(date) for frontend (overall "up to" date)
-        logger.info("Calculating min max date across all tickers for metadata")
+        # Update metadata to MAX of all tickers' MAX(date) for frontend (overall "up to" date)
+        logger.info("Calculating max max date across all tickers for metadata")
         cursor.execute("""
-            SELECT MIN(last_date) FROM (SELECT MAX(date) as last_date FROM ohlcv GROUP BY ticker)
+            SELECT MAX(last_date) FROM (SELECT MAX(date) as last_date FROM ohlcv GROUP BY ticker)
         """)
-        min_max_date = cursor.fetchone()[0]
-        if min_max_date:
+        max_max_date = cursor.fetchone()[0]
+        if max_max_date:
             cursor.execute('''
                 INSERT OR REPLACE INTO metadata (key, last_update)
                 VALUES ('last_ohlcv_update', ?)
-            ''', (min_max_date,))
+            ''', (max_max_date,))
             conn.commit()
-            logger.info(f"Updated metadata with last_ohlcv_update: {min_max_date}")
+            logger.info(f"Updated metadata with last_ohlcv_update: {max_max_date}")
         else:
-            logger.warning("No min max date found; metadata not updated")
+            logger.warning("No max max date found; metadata not updated")
         
         logger.info(f"Total inserted or replaced {inserted_rows} rows into ohlcv table")
         logger.info("Database updated successfully")
