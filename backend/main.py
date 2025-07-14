@@ -419,6 +419,8 @@ async def get_stock_data(ticker: str):
     conn.close()
     if df.empty:
         return {"error": f"No data for {ticker}"}
+    # Clean inf values to prevent JSON errors
+    df = df.replace([np.inf, -np.inf], None)
     return {"ohlcv": df.to_dict(orient="records")}
 
 @app.post("/stocks/batch")
@@ -430,6 +432,8 @@ async def get_batch_stock_data(tickers: List[str]):
         if df.empty:
             results.append({"ticker": ticker, "latest_ohlcv": None})
         else:
+            # Clean inf in latest row
+            df = df.replace([np.inf, -np.inf], None)
             latest = df.iloc[0].to_dict()
             results.append({"ticker": ticker, "latest_ohlcv": latest, "company_name": latest.get("company_name")})
     conn.close()
