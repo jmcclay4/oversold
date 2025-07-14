@@ -7,6 +7,7 @@
 # - Processes tickers in batches (BATCH_SIZE=10) to minimize memory usage on Fly.io (256MB limit).
 # - Per ticker: Fetches buffer (30 days before last date) from DB, new data from yfinance (from last_date+1 to today+1).
 # - Skips if api_start_date >= end_date (no new data needed, avoids yfinance error for future dates).
+# - Flattens columns if MultiIndex from yfinance.
 # - Concatenates, calculates indicators, inserts new rows.
 # - Commits after each batch to persist changes and free resources.
 # - Logs every step (buffer fetch, yfinance fetch, column names, data points added).
@@ -199,6 +200,7 @@ def update_data():
       - If api_start_date >= end_date, skips (no new data needed).
       - Fetches buffer (from last_date - BUFFER_DAYS) from DB.
       - Fetches new data from yfinance with retry on errors.
+      - Flattens columns if MultiIndex.
       - Concatenates, sorts, calculates indicators, inserts new rows.
     - Commits after each batch to persist changes and free memory.
     - At end, updates metadata to MIN(MAX(date) per ticker) for frontend.
@@ -250,7 +252,7 @@ def update_data():
                     # Skip if no new data possible (start >= end)
                     if api_start_date >= end_date:
                         logger.info(f"No new data needed for {ticker} (up to date as of {last_date_str})")
-                        batch_max_dates.append(last_date_str)
+                        batch_max_dates.append(last_date_str or current_date)
                         time.sleep(0.5)
                         continue
                     
@@ -291,7 +293,12 @@ def update_data():
                         time.sleep(0.5)
                         continue
                     
-                    # Handle DF structure (single ticker, no MultiIndex)
+                    # Flatten columns if MultiIndex
+                    if isinstance(new_data.columns, pd.MultiIndex):
+                        new_data.columns = new_data.columns.get_level_values(0)
+                        logger.info(f"Flattened MultiIndex columns for {ticker}")
+                    
+                    # Handle DF structure (single ticker)
                     new_data = new_data.reset_index()
                     new_data['ticker'] = ticker
                     available_columns = set(new_data.columns)
