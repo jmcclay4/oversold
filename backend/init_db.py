@@ -3,16 +3,18 @@
 # calculating technical indicators (ADX, +DI, -DI, Stochastic %K/%D), and storing results.
 # Key features:
 # - Initializes tables for OHLCV and metadata.
-# - Updates data incrementally, assuming a uniform last update date across tickers.
+# - Updates data incrementally, checking last date per ticker (MAX(date) query).
 # - Processes tickers in batches (BATCH_SIZE=10) to minimize memory usage on Fly.io (256MB limit).
-# - Fetches buffer data (30 days) from DB and new data from yfinance (using Adj Close).
-# - Concatenates buffer + new data, sorts by ticker/date.
-# - Groups by ticker, calculates indicators, inserts new rows.
+# - Per ticker: Fetches buffer (30 days before last date) from DB, new data from yfinance (from last_date+1 to today).
+# - Concatenates, calculates indicators, inserts new rows.
 # - Commits after each batch to persist changes and free resources.
 # - Logs every step (buffer fetch, yfinance fetch, column names, data points added).
 # - Falls back to SP500_TICKERS for initial runs.
 # - Handles yfinance column quirks (e.g., 'Ticker' vs. 'ticker').
 # - Standardized all column names to lowercase for consistency.
+# - Added retry for yfinance.download (up to 3 attempts on timeout/errors).
+# - At end, updates metadata to MIN(MAX(date) per ticker) for frontend consistency.
+# - No uniform assumption; each ticker updated independently.
 
 import sqlite3
 import yfinance as yf
@@ -26,7 +28,7 @@ import asyncio
 from typing import List
 from dotenv import load_dotenv
 import pytz
-import time  # For rate limiting
+import time  # For rate limiting and retries
 import gc  # For manual garbage collection
 
 # Import S&P 500 tickers for initial population or fallback
@@ -44,6 +46,10 @@ BUFFER_DAYS = 30
 
 # Batch size for processing tickers (small to avoid OOM on Fly.io free tier)
 BATCH_SIZE = 10
+
+# Number of retries for yfinance.download on errors (e.g., timeout)
+YF_RETRY_COUNT = 3
+YF_RETRY_SLEEP = 5  # seconds
 
 def init_db():
     """
@@ -78,7 +84,7 @@ def init_db():
             )
         ''')
         
-        # Create metadata table for tracking last update date
+        # Create metadata table for tracking overall last update (min max date across tickers)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS metadata (
                 key TEXT PRIMARY KEY,
@@ -173,18 +179,28 @@ def get_tracked_tickers():
         logger.error(f"Error fetching tracked tickers: {e}")
         return TICKERS
 
+def get_last_date_for_ticker(conn, ticker):
+    """
+    Queries the MAX(date) for a specific ticker from ohlcv table.
+    Returns the date as str, or None if no data.
+    """
+    cursor = conn.cursor()
+    cursor.execute("SELECT MAX(date) FROM ohlcv WHERE ticker = ?", (ticker,))
+    result = cursor.fetchone()[0]
+    return result if result else None
+
 def update_data():
     """
-    Updates the ohlcv table with new stock data since the last update (from metadata).
+    Updates the ohlcv table with new stock data, checking last date per ticker.
     - Fetches tickers (471 per logs, from DB or TICKERS).
-    - Gets last update date from metadata (assumes uniform across tickers).
     - For each batch (10 tickers):
-      - Fetches buffer data (30 days) from DB for indicator calculations.
-      - Fetches new data from yfinance (from last_update+1 to today).
-      - Concatenates buffer + new data, sorts by ticker/date.
-      - Groups by ticker, calculates indicators, inserts new rows.
+      - Queries last date per ticker in batch.
+      - Per ticker: Sets api_start_date = last_date +1 or full year if none.
+      - Fetches buffer (from last_date - BUFFER_DAYS) from DB.
+      - Fetches new data from yfinance with retry on errors.
+      - Concatenates, sorts, calculates indicators, inserts new rows.
     - Commits after each batch to persist changes and free memory.
-    - Updates metadata with the latest date inserted.
+    - At end, updates metadata to MIN(MAX(date) per ticker) for frontend.
     - Skips non-trading days (yfinance returns empty for weekends/holidays).
     - Uses float32 for memory efficiency.
     """
@@ -199,121 +215,114 @@ def update_data():
         if not tickers:
             raise ValueError("No tickers available for update")
         
-        # Get last update date from metadata
-        cursor.execute("SELECT last_update FROM metadata WHERE key = 'last_ohlcv_update'")
-        result = cursor.fetchone()
-        last_update = result[0] if result else None
+        # End date for all fetches (up to today)
+        end_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
         
-        # Set date range
-        end_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')  # Up to today
-        if last_update:
-            initial_last_date_str = last_update.split()[0] if ' ' in last_update else last_update
-            last_date = datetime.strptime(initial_last_date_str, '%Y-%m-%d')
-            api_start_date = (last_date + timedelta(days=1)).strftime('%Y-%m-%d')
-            db_start_date = (last_date - timedelta(days=BUFFER_DAYS)).strftime('%Y-%m-%d')
-            logger.info(f"Incremental update: DB buffer from {db_start_date}, API from {api_start_date} to {end_date}")
-        else:
-            api_start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
-            db_start_date = None
-            initial_last_date_str = '1900-01-01'
-            logger.info(f"Initial full fetch from {api_start_date} to {end_date}")
-        
-        # Track latest date for metadata update
-        new_latest_date = initial_last_date_str
+        # Track overall inserted rows and min max date for metadata
         inserted_rows = 0
+        all_max_dates = []
         
         # Process tickers in batches
         for i in range(0, len(tickers), BATCH_SIZE):
             batch_tickers = tickers[i:i + BATCH_SIZE]
             logger.info(f"Processing batch {i//BATCH_SIZE + 1}: {len(batch_tickers)} tickers ({', '.join(batch_tickers)})")
             
-            # Step 1: Fetch buffer data from DB (if not initial)
-            buffer_df = pd.DataFrame()
-            if db_start_date:
-                logger.info(f"Fetching buffer data from DB for batch since {db_start_date}")
-                placeholders = ','.join(['?'] * len(batch_tickers))
-                query = f"""
-                    SELECT ticker, date, open, high, low, close, volume, company_name
-                    FROM ohlcv
-                    WHERE ticker IN ({placeholders}) AND date >= ?
-                    ORDER BY ticker, date
-                """
-                buffer_df = pd.read_sql_query(query, conn, params=[*batch_tickers, db_start_date])
-                buffer_df = buffer_df.astype({'open': 'float32', 'high': 'float32', 'low': 'float32', 'close': 'float32', 'volume': 'int32'})
-                logger.info(f"Fetched buffer DF with {len(buffer_df)} rows for batch")
+            batch_inserted = 0
+            batch_max_dates = []
             
-            # Step 2: Fetch new data from yfinance
-            logger.info(f"Fetching new data from yfinance for batch from {api_start_date} to {end_date}")
-            new_data = yf.download(batch_tickers, start=api_start_date, end=end_date, auto_adjust=False, progress=False)
-            if new_data.empty:
-                logger.warning(f"No new data returned from yfinance for batch {batch_tickers}")
-                continue
-            
-            # Handle DataFrame structure
-            if isinstance(new_data.columns, pd.MultiIndex):
-                new_data = new_data.stack(future_stack=True).reset_index()
-                new_data = new_data.rename(columns={'level_1': 'ticker', 'Ticker': 'ticker'})  # Handle capitalization
-                logger.info("Handled MultiIndex DF from yfinance")
-            else:
-                if len(batch_tickers) == 1:
-                    new_data = new_data.reset_index()
-                    new_data['ticker'] = batch_tickers[0]
-                    logger.info(f"Handled single-ticker DF for {batch_tickers[0]}")
-                else:
-                    logger.error(f"Unexpected non-MultiIndex DF for batch {batch_tickers}; skipping")
-                    continue
-            
-            # Select and rename columns to lowercase, using 'Adj Close' as 'close'
-            expected_columns = ['Date', 'ticker', 'Open', 'High', 'Low', 'Adj Close', 'Volume']
-            available_columns = set(new_data.columns)
-            logger.info(f"yfinance returned columns: {list(available_columns)}")
-            if set(expected_columns).issubset(available_columns):
-                new_data = new_data[expected_columns]
-                new_data.columns = ['date', 'ticker', 'open', 'high', 'low', 'close', 'volume']
-                new_data['date'] = new_data['date'].dt.strftime('%Y-%m-%d')
-                new_data = new_data.astype({'open': 'float32', 'high': 'float32', 'low': 'float32', 'close': 'float32', 'volume': 'int32'})
-            else:
-                logger.error(f"Missing expected columns in new_data for batch {batch_tickers}. Required: {expected_columns}, Actual: {list(available_columns)}; skipping")
-                continue
-            
-            # Add company names
-            company_names = {}
-            for t in batch_tickers:
-                try:
-                    company_names[t] = yf.Ticker(t).info.get('longName', t)
-                    time.sleep(0.1)
-                except:
-                    company_names[t] = t
-            new_data['company_name'] = new_data['ticker'].map(company_names)
-            logger.info(f"Fetched new DF with {len(new_data)} rows for batch")
-            
-            # Step 3: Concat buffer and new data
-            if not buffer_df.empty:
-                buffer_df['company_name'] = buffer_df['ticker'].map(company_names)
-                combined_df = pd.concat([buffer_df, new_data], ignore_index=True).drop_duplicates(subset=['ticker', 'date'])
-            else:
-                combined_df = new_data
-            combined_df = combined_df.sort_values(['ticker', 'date'])
-            logger.info(f"Combined DF with {len(combined_df)} rows for batch")
-            
-            # Free memory
-            del buffer_df, new_data
-            gc.collect()
-            
-            # Step 4: Process each ticker in the batch
-            grouped = combined_df.groupby('ticker')
-            for ticker, group in grouped:
+            for ticker in batch_tickers:
                 logger.info(f"Processing ticker {ticker} in batch")
                 try:
-                    min_date = group['date'].min()
-                    max_date = group['date'].max()
-                    logger.info(f"Calculating indicators for {ticker} on dates from {min_date} to {max_date}")
-                    group = calculate_indicators(group)  # No rename needed; function uses lowercase
+                    # Get last date for this ticker
+                    last_date_str = get_last_date_for_ticker(conn, ticker)
+                    if last_date_str:
+                        last_date = datetime.strptime(last_date_str, '%Y-%m-%d')
+                        api_start_date = (last_date + timedelta(days=1)).strftime('%Y-%m-%d')
+                        db_start_date = (last_date - timedelta(days=BUFFER_DAYS)).strftime('%Y-%m-%d')
+                        logger.info(f"Incremental for {ticker}: DB buffer from {db_start_date}, API from {api_start_date} to {end_date}")
+                    else:
+                        api_start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+                        db_start_date = None
+                        logger.info(f"Initial full fetch for {ticker} from {api_start_date} to {end_date}")
                     
-                    # Insert new rows
+                    # Step 1: Fetch buffer data from DB
+                    buffer_df = pd.DataFrame()
+                    if db_start_date:
+                        logger.info(f"Fetching buffer data from DB for {ticker} since {db_start_date}")
+                        query = """
+                            SELECT date, open, high, low, close, volume, company_name
+                            FROM ohlcv
+                            WHERE ticker = ? AND date >= ?
+                            ORDER BY date
+                        """
+                        buffer_df = pd.read_sql_query(query, conn, params=(ticker, db_start_date))
+                        buffer_df = buffer_df.astype({'open': 'float32', 'high': 'float32', 'low': 'float32', 'close': 'float32', 'volume': 'int32'})
+                        buffer_df['ticker'] = ticker  # Add ticker column
+                        logger.info(f"Fetched buffer DF with {len(buffer_df)} rows for {ticker}")
+                    
+                    # Step 2: Fetch new data from yfinance with retry
+                    new_data = None
+                    for attempt in range(1, YF_RETRY_COUNT + 1):
+                        try:
+                            logger.info(f"Fetching new data from yfinance for {ticker} (attempt {attempt})")
+                            new_data = yf.download(ticker, start=api_start_date, end=end_date, auto_adjust=False, progress=False)
+                            if not new_data.empty:
+                                break
+                        except Exception as e:
+                            logger.warning(f" yfinance error for {ticker} on attempt {attempt}: {e}")
+                            if attempt < YF_RETRY_COUNT:
+                                time.sleep(YF_RETRY_SLEEP)
+                            else:
+                                logger.error(f"Failed to fetch data for {ticker} after {YF_RETRY_COUNT} attempts")
+                                break
+                    
+                    if new_data is None or new_data.empty:
+                        logger.warning(f"No new data for {ticker}, skipping")
+                        continue
+                    
+                    # Handle DF structure (single ticker, no MultiIndex)
+                    new_data = new_data.reset_index()
+                    new_data['ticker'] = ticker
+                    available_columns = set(new_data.columns)
+                    logger.info(f"yfinance returned columns for {ticker}: {list(available_columns)}")
+                    expected_columns = ['Date', 'ticker', 'Open', 'High', 'Low', 'Adj Close', 'Volume']
+                    if set(expected_columns).issubset(available_columns):
+                        new_data = new_data[expected_columns]
+                        new_data.columns = ['date', 'ticker', 'open', 'high', 'low', 'close', 'volume']
+                        new_data['date'] = new_data['date'].dt.strftime('%Y-%m-%d')
+                        new_data = new_data.astype({'open': 'float32', 'high': 'float32', 'low': 'float32', 'close': 'float32', 'volume': 'int32'})
+                    else:
+                        logger.error(f"Missing expected columns for {ticker}. Required: {expected_columns}, Actual: {list(available_columns)}; skipping")
+                        continue
+                    
+                    # Add company name
+                    try:
+                        company_name = yf.Ticker(ticker).info.get('longName', ticker)
+                    except:
+                        company_name = ticker
+                    new_data['company_name'] = company_name
+                    logger.info(f"Fetched new DF with {len(new_data)} rows for {ticker}")
+                    
+                    # Step 3: Concat buffer and new data
+                    if not buffer_df.empty:
+                        buffer_df['company_name'] = company_name
+                        combined_df = pd.concat([buffer_df, new_data], ignore_index=True).drop_duplicates(subset=['date'])
+                    else:
+                        combined_df = new_data
+                    combined_df = combined_df.sort_values('date')
+                    logger.info(f"Combined DF with {len(combined_df)} rows for {ticker}")
+                    
+                    # Step 4: Calculate indicators
+                    min_date = combined_df['date'].min()
+                    max_date = combined_df['date'].max()
+                    logger.info(f"Calculating indicators for {ticker} on dates from {min_date} to {max_date}")
+                    combined_df = calculate_indicators(combined_df)
+                    
+                    # Step 5: Insert new rows
                     count = 0
-                    for _, row in group.iterrows():
-                        if row['date'] > initial_last_date_str:
+                    ticker_max_date = last_date_str or '1900-01-01'
+                    for _, row in combined_df.iterrows():
+                        if row['date'] > ticker_max_date:
                             cursor.execute('''
                                 INSERT OR REPLACE INTO ohlcv (
                                     ticker, date, open, high, low, close, volume, 
@@ -336,11 +345,19 @@ def update_data():
                             ))
                             count += 1
                             logger.info(f"Added data point for {ticker} on {row['date']}")
-                            if row['date'] > new_latest_date:
-                                new_latest_date = row['date']
+                            if row['date'] > ticker_max_date:
+                                ticker_max_date = row['date']
                     if count > 0:
                         logger.info(f"Added {count} new data points for {ticker}")
                     inserted_rows += count
+                    batch_max_dates.append(ticker_max_date)
+                    
+                    # Free memory per ticker
+                    del combined_df
+                    gc.collect()
+                    
+                    time.sleep(0.5)  # Short sleep to avoid rate limiting
+                    
                 except Exception as e:
                     logger.error(f"Error processing ticker {ticker}: {e}")
                     continue
@@ -348,19 +365,23 @@ def update_data():
             # Commit batch changes
             conn.commit()
             logger.info(f"Committed changes for batch, total inserted so far: {inserted_rows}")
-            del combined_df, grouped
-            gc.collect()
         
-        # Update metadata
-        if new_latest_date > initial_last_date_str:
-            cursor.execute('''
-                INSERT OR REPLACE INTO metadata (key, last_update)
-                VALUES ('last_ohlcv_update', ?)
-            ''', (new_latest_date,))
-            conn.commit()
-            logger.info(f"Updated metadata with last_ohlcv_update: {new_latest_date}")
-        else:
-            logger.info("No new data inserted, metadata unchanged")
+        # Update metadata to MIN of all tickers' MAX(date) for frontend (overall "up to" date)
+        if inserted_rows > 0:
+            logger.info("Calculating min max date across all tickers for metadata")
+            cursor.execute("""
+                SELECT MIN(last_date) FROM (SELECT MAX(date) as last_date FROM ohlcv GROUP BY ticker)
+            """)
+            min_max_date = cursor.fetchone()[0]
+            if min_max_date:
+                cursor.execute('''
+                    INSERT OR REPLACE INTO metadata (key, last_update)
+                    VALUES ('last_ohlcv_update', ?)
+                ''', (min_max_date,))
+                conn.commit()
+                logger.info(f"Updated metadata with last_ohlcv_update: {min_max_date}")
+            else:
+                logger.warning("No min max date found; metadata not updated")
         
         logger.info(f"Total inserted or replaced {inserted_rows} rows into ohlcv table")
         logger.info("Database updated successfully")
