@@ -6,12 +6,13 @@
 # - Updates data incrementally, assuming a uniform last update date across tickers.
 # - Processes tickers in batches (BATCH_SIZE=10) to minimize memory usage on Fly.io (256MB limit).
 # - Fetches buffer data (30 days) from DB and new data from yfinance (using Adj Close).
-# - Concatenates, calculates indicators, and inserts only new rows (dates > last_update).
-# - Uses float32 for numeric columns to reduce memory.
+# - Concatenates buffer + new data, sorts by ticker/date.
+# - Groups by ticker, calculates indicators, inserts new rows.
 # - Commits after each batch to persist changes and free resources.
 # - Logs every step (buffer fetch, yfinance fetch, column names, data points added).
 # - Falls back to SP500_TICKERS for initial runs.
 # - Handles yfinance column quirks (e.g., 'Ticker' vs. 'ticker').
+# - Standardized all column names to lowercase for consistency.
 
 import sqlite3
 import yfinance as yf
@@ -103,10 +104,11 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     - Stochastic %K (14-day) and %D (3-day SMA of %K)
     Uses pandas rolling operations on small DFs (~40 rows/ticker).
     Converts outputs to float32 for memory efficiency.
+    Expects lowercase columns: 'open', 'high', 'low', 'close', 'volume'.
     """
     logger.info(f"Calculating technical indicators for DF with {len(df)} rows")
     try:
-        # Extract price series
+        # Extract price series (lowercase columns)
         high = df['high']
         low = df['low']
         close = df['close']
@@ -250,7 +252,7 @@ def update_data():
             # Handle DataFrame structure
             if isinstance(new_data.columns, pd.MultiIndex):
                 new_data = new_data.stack(future_stack=True).reset_index()
-                new_data = new_data.rename(columns={'level_1': 'ticker', 'Ticker': 'ticker'})  # Handle both 'level_1' and 'Ticker'
+                new_data = new_data.rename(columns={'level_1': 'ticker', 'Ticker': 'ticker'})  # Handle capitalization
                 logger.info("Handled MultiIndex DF from yfinance")
             else:
                 if len(batch_tickers) == 1:
@@ -261,7 +263,7 @@ def update_data():
                     logger.error(f"Unexpected non-MultiIndex DF for batch {batch_tickers}; skipping")
                     continue
             
-            # Select and rename columns, using 'Adj Close' as 'close'
+            # Select and rename columns to lowercase, using 'Adj Close' as 'close'
             expected_columns = ['Date', 'ticker', 'Open', 'High', 'Low', 'Adj Close', 'Volume']
             available_columns = set(new_data.columns)
             logger.info(f"yfinance returned columns: {list(available_columns)}")
@@ -306,7 +308,7 @@ def update_data():
                     min_date = group['date'].min()
                     max_date = group['date'].max()
                     logger.info(f"Calculating indicators for {ticker} on dates from {min_date} to {max_date}")
-                    group = calculate_indicators(group.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}))
+                    group = calculate_indicators(group)  # No rename needed; function uses lowercase
                     
                     # Insert new rows
                     count = 0
@@ -320,11 +322,11 @@ def update_data():
                             ''', (
                                 ticker,
                                 row['date'],
-                                row['Open'],
-                                row['High'],
-                                row['Low'],
-                                row['Close'],
-                                int(row['Volume']) if pd.notna(row['Volume']) else None,
+                                row['open'],
+                                row['high'],
+                                row['low'],
+                                row['close'],
+                                int(row['volume']) if pd.notna(row['volume']) else None,
                                 row['company_name'],
                                 row['adx'] if pd.notna(row['adx']) else None,
                                 row['pdi'] if pd.notna(row['pdi']) else None,
