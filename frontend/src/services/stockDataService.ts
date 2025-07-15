@@ -141,7 +141,7 @@ export const analyzeStockTicker = async (ticker: string): Promise<StockAnalysisR
         ohlcv: [],
       };
     }
-    if (ohlcvData.length < 2) {
+    if (ohlcvData.length < 3) {  // Need at least 3 days for signals
       return {
         ticker,
         statusTags: [],
@@ -154,6 +154,7 @@ export const analyzeStockTicker = async (ticker: string): Promise<StockAnalysisR
     }
     const latestOhlcvDataPoint = ohlcvData[ohlcvData.length - 1];
     const previousOhlcvDataPoint = ohlcvData[ohlcvData.length - 2];
+    const previousPrevious = ohlcvData[ohlcvData.length - 3];  // For 3-day checks
     const latestPrice = latestOhlcvDataPoint.close;
     const percentChange = previousOhlcvDataPoint.close
       ? ((latestPrice - previousOhlcvDataPoint.close) / previousOhlcvDataPoint.close) * 100
@@ -181,44 +182,67 @@ export const analyzeStockTicker = async (ticker: string): Promise<StockAnalysisR
         d: previousOhlcvDataPoint.d,
       };
     }
+    let previousPreviousIndicators: IndicatorValues | undefined = undefined;
+    if (
+      previousPrevious.adx != null &&
+      previousPrevious.pdi != null &&
+      previousPrevious.mdi != null &&
+      previousPrevious.k != null &&
+      previousPrevious.d != null
+    ) {
+      previousPreviousIndicators = {
+        adx: previousPrevious.adx,
+        pdi: previousPrevious.pdi,
+        mdi: previousPrevious.mdi,
+        k: previousPrevious.k,
+        d: previousPrevious.d,
+      };
+    }
     const statusTags: string[] = [];
     let meetsCriteria = false;
     let message = "";
-    const pdiCrossedAboveMdi =
-      latestIndicators.pdi != null &&
-      latestIndicators.mdi != null &&
-      previousIndicators &&
-      previousIndicators.pdi != null &&
-      previousIndicators.mdi != null &&
-      latestIndicators.pdi > latestIndicators.mdi &&
-      previousIndicators.pdi <= previousIndicators.mdi;
-    const pdiCurrentlyAboveMdi =
-      latestIndicators.pdi != null && latestIndicators.mdi != null && latestIndicators.pdi > latestIndicators.mdi;
-    const pdiNearingMdi =
-      latestIndicators.pdi != null &&
-      latestIndicators.mdi != null &&
-      latestIndicators.mdi > 0 &&
-      Math.abs(latestIndicators.pdi - latestIndicators.mdi) / latestIndicators.mdi <= DMI_CROSSOVER_PROXIMITY_PERCENTAGE;
-    const isStrongTrend = latestIndicators.adx != null && latestIndicators.adx >= ADX_TREND_STRENGTH_THRESHOLD;
-    const isStochasticClose = (k: number | null, d: number | null) => k != null && d != null && Math.abs(k - d) <= 8;
-    const isStochasticOversold = (k: number | null, d: number | null) => (k != null && k <= 20) || (d != null && d <= 20);
-    const isStochasticSignal = (k: number | null, d: number | null) => isStochasticClose(k, d) && isStochasticOversold(k, d);
-    const hasStochasticSignal =
-      isStochasticSignal(latestIndicators.k, latestIndicators.d) ||
-      (previousIndicators && isStochasticSignal(previousIndicators.k, previousIndicators.d));
-    if (pdiCrossedAboveMdi || pdiCurrentlyAboveMdi || pdiNearingMdi) {
+    
+    // DMI Logic
+    const pdi = latestIndicators.pdi;
+    const mdi = latestIndicators.mdi;
+    const prev_pdi = previousIndicators?.pdi ?? null;
+    const prev_mdi = previousIndicators?.mdi ?? null;
+    const prev_prev_pdi = previousPreviousIndicators?.pdi ?? null;
+    const prev_prev_mdi = previousPreviousIndicators?.mdi ?? null;
+    
+    const dmiCrossLast2Days = (
+      (prev_pdi != null && prev_mdi != null && prev_pdi > prev_mdi && (previousPreviousIndicators?.pdi ?? prev_pdi) <= (previousPreviousIndicators?.mdi ?? prev_mdi)) ||
+      (pdi != null && mdi != null && pdi > mdi && prev_pdi <= prev_mdi)
+    );
+    const dmiWithin5Percent = pdi != null && mdi != null && mdi > 0 && Math.abs(pdi - mdi) / Math.max(pdi, mdi) <= 0.05;
+    const dmiWithin1Percent = pdi != null && mdi != null && mdi > 0 && Math.abs(pdi - mdi) / Math.max(pdi, mdi) <= 0.01;
+    
+    if ((dmiCrossLast2Days && dmiWithin5Percent) || dmiWithin1Percent) {
       statusTags.push('DMI');
       meetsCriteria = true;
     }
-    if (isStrongTrend) {
-      statusTags.push('ADX');
-    }
-    if (hasStochasticSignal) {
+    
+    // Stochastic Logic (last 3 days)
+    const k = latestIndicators.k;
+    const d_val = latestIndicators.d;
+    const prev_k = previousIndicators?.k ?? null;
+    const prev_d = previousIndicators?.d ?? null;
+    const prev_prev_k = previousPreviousIndicators?.k ?? null;
+    const prev_prev_d = previousPreviousIndicators?.d ?? null;
+    
+    const stoCrossLast3Days = (
+      (prev_k != null && prev_d != null && prev_k > prev_d && (prev_prev_k ?? prev_k) <= (prev_prev_d ?? prev_d) && (Math.min(prev_k, prev_d) <= 22 || Math.min(k ?? prev_k, d_val ?? prev_d) <= 22)) ||
+      (k != null && d_val != null && k > d_val && prev_k <= prev_d && (Math.min(k, d_val) <= 22 || Math.min(prev_k, prev_d) <= 22))
+    );
+    const stoIncreasingAndClose = k != null && prev_k != null && k > prev_k && d_val != null && Math.abs(k - d_val) <= 3 && (k <= 21 || d_val <= 21);
+    
+    if (stoCrossLast3Days || stoIncreasingAndClose) {
       statusTags.push('STO');
       meetsCriteria = true;
     }
+    
     if (statusTags.length === 0) {
-      message = `No alerts. ADX: ${latestIndicators.adx?.toFixed(2) ?? 'N/A'}, +DI: ${latestIndicators.pdi?.toFixed(2) ?? 'N/A'}, -DI: ${latestIndicators.mdi?.toFixed(2) ?? 'N/A'}, %K: ${latestIndicators.k?.toFixed(2) ?? 'N/A'}, %D: ${latestIndicators.d?.toFixed(2) ?? 'N/A'}.`;
+      message = `No alerts. +DI: ${latestIndicators.pdi?.toFixed(2) ?? 'N/A'}, -DI: ${latestIndicators.mdi?.toFixed(2) ?? 'N/A'}, %K: ${latestIndicators.k?.toFixed(2) ?? 'N/A'}, %D: ${latestIndicators.d?.toFixed(2) ?? 'N/A'}.`;
     } else {
       message = `Alerts: ${statusTags.join(', ')}.`;
     }
@@ -290,31 +314,29 @@ export const analyzeTrackedStocks = async (tickers: string[]): Promise<StockAnal
         const statusTags: string[] = [];
         let meetsCriteria = false;
         let message = "";
-        const pdiCurrentlyAboveMdi =
-          latestIndicators.pdi != null && latestIndicators.mdi != null && latestIndicators.pdi > latestIndicators.mdi;
-        const pdiNearingMdi =
-          latestIndicators.pdi != null &&
-          latestIndicators.mdi != null &&
-          latestIndicators.mdi > 0 &&
-          Math.abs(latestIndicators.pdi - latestIndicators.mdi) / latestIndicators.mdi <= DMI_CROSSOVER_PROXIMITY_PERCENTAGE;
-        const isStrongTrend = latestIndicators.adx != null && latestIndicators.adx >= ADX_TREND_STRENGTH_THRESHOLD;
-        const isStochasticClose = (k: number | null, d: number | null) => k != null && d != null && Math.abs(k - d) <= 8;
-        const isStochasticOversold = (k: number | null, d: number | null) => (k != null && k <= 20) || (d != null && d <= 20);
-        const isStochasticSignal = (k: number | null, d: number | null) => isStochasticClose(k, d) && isStochasticOversold(k, d);
-        const hasStochasticSignal = isStochasticSignal(latestIndicators.k, latestIndicators.d);
-        if (pdiCurrentlyAboveMdi || pdiNearingMdi) {
+        
+        // DMI Logic (approximate for latest only; no multi-day cross, so only closeness)
+        const pdi = latestIndicators.pdi;
+        const mdi = latestIndicators.mdi;
+        const dmiWithin1Percent = pdi != null && mdi != null && mdi > 0 && Math.abs(pdi - mdi) / Math.max(pdi, mdi) <= 0.01;
+        
+        if (dmiWithin1Percent) {
           statusTags.push('DMI');
           meetsCriteria = true;
         }
-        if (isStrongTrend) {
-          statusTags.push('ADX');
-        }
-        if (hasStochasticSignal) {
+        
+        // Stochastic Logic (approximate for latest only; no multi-day, so only close + oversold)
+        const k = latestIndicators.k;
+        const d_val = latestIndicators.d;
+        const stoCloseAndOversold = k != null && d_val != null && Math.abs(k - d_val) <= 3 && (k <= 21 || d_val <= 21);
+        
+        if (stoCloseAndOversold) {
           statusTags.push('STO');
           meetsCriteria = true;
         }
+        
         if (statusTags.length === 0) {
-          message = `No alerts. ADX: ${latestIndicators.adx?.toFixed(2) ?? 'N/A'}, +DI: ${latestIndicators.pdi?.toFixed(2) ?? 'N/A'}, -DI: ${latestIndicators.mdi?.toFixed(2) ?? 'N/A'}, %K: ${latestIndicators.k?.toFixed(2) ?? 'N/A'}, %D: ${latestIndicators.d?.toFixed(2) ?? 'N/A'}.`;
+          message = `No alerts. +DI: ${latestIndicators.pdi?.toFixed(2) ?? 'N/A'}, -DI: ${latestIndicators.mdi?.toFixed(2) ?? 'N/A'}, %K: ${latestIndicators.k?.toFixed(2) ?? 'N/A'}, %D: ${latestIndicators.d?.toFixed(2) ?? 'N/A'}.`;
         } else {
           message = `Alerts: ${statusTags.join(', ')}.`;
         }
