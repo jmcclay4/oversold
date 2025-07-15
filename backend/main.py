@@ -543,3 +543,16 @@ async def manual_update_db():
     except Exception as e:
         logger.error(f"Error during manual database update: {e}")
         raise HTTPException(status_code=500, detail="Error updating database")
+
+@app.post("/recalculate-indicators")
+async def manual_recalculate_indicators():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        all_tickers = get_tracked_tickers()
+        for ticker in all_tickers:
+            recalculate_indicators(conn, ticker)
+        conn.close()
+        return {"message": "Indicators recalculated for all tickers"}
+    except Exception as e:
+        logger.error(f"Error during manual recalculation: {e}")
+        raise HTTPException(status_code=500, detail="Error recalculating indicators")

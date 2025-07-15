@@ -29,7 +29,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: 'Close Price',
         data: stockData.historicalClosePrices,
-        borderColor: '#f59e0b',
+        borderColor: '#ffffff',
         fill: false,
         yAxisID: 'y-price',
         pointRadius: 0,
@@ -38,7 +38,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: 'ADX',
         data: stockData.historicalAdx || [],
-        borderColor: '#a855f7',
+        borderColor: '#3ded97',
         fill: false,
         yAxisID: 'y-indicators',
         pointRadius: 0,
