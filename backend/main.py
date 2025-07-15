@@ -36,6 +36,7 @@ BUFFER_DAYS = 30
 BATCH_SIZE = 10
 YF_RETRY_COUNT = 3
 YF_RETRY_SLEEP = 5  # seconds
+HISTORY_MONTHS = 6  # Limit to 6 months of data
 
 def init_db():
     """
@@ -90,11 +91,11 @@ def init_db():
 def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
     Calculates technical indicators for a DataFrame:
-    - ADX (Average Directional Index, 14-day)
-    - +DI (Plus Directional Indicator, 14-day)
-    - -DI (Minus Directional Indicator, 14-day)
-    - Stochastic %K (14-day) and %D (3-day SMA of %K)
-    Uses pandas rolling operations on small DFs (~40 rows/ticker).
+    - ADX (Average Directional Index, 9-day)
+    - +DI (Plus Directional Indicator, 9-day)
+    - -DI (Minus Directional Indicator, 9-day)
+    - Stochastic %K (9-day, slow with 3,3 smoothing) and %D (3-day SMA)
+    Uses pandas rolling operations on small DFs.
     Converts outputs to float32 for memory efficiency.
     Expects lowercase columns: 'open', 'high', 'low', 'close', 'volume'.
     """
@@ -105,38 +106,38 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
         low = df['low']
         close = df['close']
         
-        # Define period for indicators
-        period = 14
+        # Periods
+        period_dmi_adx = 9
+        period_stoch = 9
+        period_slow = 3
         
-        # Calculate True Range (TR): max of high-low, |high-prev_close|, |low-prev_close|
+        # DMI/ADX (9,9)
         delta_high = high.diff()
         delta_low = low.diff()
         tr = pd.concat([high - low, abs(high - close.shift()), abs(low - close.shift())], axis=1).max(axis=1)
-        atr = tr.rolling(window=period).mean()
+        atr = tr.rolling(window=period_dmi_adx).mean()
         
-        # Calculate Directional Movement (+DM, -DM)
         plus_dm = delta_high.where(delta_high > 0, 0)
         minus_dm = abs(delta_low.where(delta_low > 0, 0))
         
-        # Calculate +DI and -DI (directional indicators)
-        plus_di = 100 * plus_dm.rolling(window=period).mean() / atr
-        minus_di = 100 * minus_dm.rolling(window=period).mean() / atr
+        plus_di = 100 * plus_dm.rolling(window=period_dmi_adx).mean() / atr
+        minus_di = 100 * minus_dm.rolling(window=period_dmi_adx).mean() / atr
         
-        # Calculate DX and ADX (trend strength)
         dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
-        adx = dx.rolling(window=period).mean()
+        adx = dx.rolling(window=period_dmi_adx).mean()
         
-        # Calculate Stochastic %K and %D
-        lowest_low = low.rolling(window=period).min()
-        highest_high = high.rolling(window=period).max()
-        k = 100 * (close - lowest_low) / (highest_high - lowest_low)
-        d = k.rolling(window=3).mean()
+        # Stochastic (9,3,3) - Slow Stochastic
+        lowest_low = low.rolling(window=period_stoch).min()
+        highest_high = high.rolling(window=period_stoch).max()
+        k_fast = 100 * (close - lowest_low) / (highest_high - lowest_low)
+        k_slow = k_fast.rolling(window=period_slow).mean()  # Slow %K = SMA(Fast %K, 3)
+        d = k_slow.rolling(window=period_slow).mean()  # %D = SMA(Slow %K, 3)
         
         # Assign indicators to DF, using float32 to save memory
         df['adx'] = adx.astype('float32') if adx.notnull().any() else np.nan
         df['pdi'] = plus_di.astype('float32') if plus_di.notnull().any() else np.nan
         df['mdi'] = minus_di.astype('float32') if minus_di.notnull().any() else np.nan
-        df['k'] = k.astype('float32') if k.notnull().any() else np.nan
+        df['k'] = k_slow.astype('float32') if k_slow.notnull().any() else np.nan  # Slow %K
         df['d'] = d.astype('float32') if d.notnull().any() else np.nan
         
         return df
@@ -174,6 +175,44 @@ def get_last_date_for_ticker(conn, ticker):
     cursor.execute("SELECT MAX(date) FROM ohlcv WHERE ticker = ?", (ticker,))
     result = cursor.fetchone()[0]
     return result if result else None
+
+def trim_old_data(conn):
+    """
+    Deletes data older than 6 months for all tickers to limit history.
+    """
+    logger.info("Trimming old data to last 6 months")
+    six_months_ago = (datetime.now() - timedelta(days=30 * HISTORY_MONTHS)).strftime('%Y-%m-%d')
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM ohlcv WHERE date < ?", (six_months_ago,))
+    deleted = cursor.rowcount
+    conn.commit()
+    logger.info(f"Deleted {deleted} old rows")
+
+def recalculate_indicators(conn, ticker):
+    """
+    Recalculates indicators for a ticker's data and updates the DB.
+    """
+    logger.info(f"Recalculating indicators for {ticker}")
+    df = pd.read_sql_query("SELECT * FROM ohlcv WHERE ticker = ? ORDER BY date", conn, params=(ticker,))
+    if df.empty:
+        return
+    df = calculate_indicators(df)
+    cursor = conn.cursor()
+    for _, row in df.iterrows():
+        cursor.execute('''
+            UPDATE ohlcv SET adx = ?, pdi = ?, mdi = ?, k = ?, d = ?
+            WHERE ticker = ? AND date = ?
+        ''', (
+            row['adx'] if pd.notna(row['adx']) else None,
+            row['pdi'] if pd.notna(row['pdi']) else None,
+            row['mdi'] if pd.notna(row['mdi']) else None,
+            row['k'] if pd.notna(row['k']) else None,
+            row['d'] if pd.notna(row['d']) else None,
+            ticker,
+            row['date']
+        ))
+    conn.commit()
+    logger.info(f"Updated indicators for {ticker}")
 
 def update_data():
     """
@@ -377,6 +416,13 @@ def update_data():
             # Commit batch changes
             conn.commit()
             logger.info(f"Committed changes for batch, total inserted so far: {inserted_rows}")
+        
+        # Trim old data after updates
+        trim_old_data(conn)
+        
+        # Recalculate indicators for all tickers (since periods changed)
+        for ticker in all_tickers:
+            recalculate_indicators(conn, ticker)
         
         # Update metadata to MAX of all tickers' MAX(date) for frontend (overall "up to" date)
         logger.info("Calculating max max date across all tickers for metadata")
