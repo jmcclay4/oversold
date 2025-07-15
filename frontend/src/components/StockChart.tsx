@@ -36,15 +36,6 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
         pointHoverRadius: 5,
       },
       {
-        label: 'ADX',
-        data: stockData.historicalAdx || [],
-        borderColor: '#3ded97',
-        fill: false,
-        yAxisID: 'y-indicators',
-        pointRadius: 0,
-        pointHoverRadius: 5,
-      },
-      {
         label: '+DI',
         data: stockData.historicalPdi || [],
         borderColor: '#3b82f6',
@@ -62,6 +53,16 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
         pointRadius: 0,
         pointHoverRadius: 5,
       },
+      {
+        label: 'ADX',
+        data: stockData.historicalAdx || [],
+        borderColor: '#3ded97',
+        fill: false,
+        yAxisID: 'y-indicators',
+        pointRadius: 0,
+        pointHoverRadius: 5,
+      },
+
     ],
   };
 
