@@ -159,10 +159,10 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
         plus_dm = delta_high.where((delta_high > 0) & (delta_high > delta_low.abs()), 0)
         minus_dm = delta_low.abs().where((delta_low > 0) & (delta_low.abs() > delta_high), 0)
         
-        # Wilder's smoothing for +DM, -DM, and TR
+        # Wilder's smoothing function
         def wilder_smooth(series, period):
             smoothed = series.copy()
-            smoothed[:period] = series[:period].mean()  # First value is simple mean
+            smoothed.iloc[period - 1] = series.iloc[:period].mean()  # First value is simple mean
             for i in range(period, len(series)):
                 smoothed.iloc[i] = (smoothed.iloc[i-1] * (period - 1) + series.iloc[i]) / period
             return smoothed
