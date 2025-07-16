@@ -210,13 +210,17 @@ def compute_signals(df: pd.DataFrame) -> tuple[int, int]:
     dmi_signal = 0
     if (pdi is not None and mdi is not None and prev_pdi is not None and prev_mdi is not None and
         prev_prev_pdi is not None and prev_prev_mdi is not None):
-        cross_last2 = (
+        cross_plus_di = (
             (prev_pdi > prev_mdi and prev_prev_pdi <= prev_prev_mdi) or
             (pdi > mdi and prev_pdi <= prev_mdi)
         )
         within_5pct = mdi > 0 and abs(pdi - mdi) / max(pdi, mdi) <= 0.05
-        within_1pct = mdi > 0 and abs(pdi - mdi) / max(pdi, mdi) <= 0.01
-        dmi_signal = 1 if (cross_last2 and within_5pct) or within_1pct else 0
+        within_1pct = pdi <= mdi and mdi > 0 and abs(pdi - mdi) / max(pdi, mdi) <= 0.01
+        no_minus_di_cross = not (
+            (prev_mdi > prev_pdi and prev_prev_mdi <= prev_prev_pdi) or
+            (mdi > pdi and prev_mdi <= prev_pdi)
+        )
+        dmi_signal = 1 if (cross_plus_di and within_5pct) or (within_1pct and no_minus_di_cross) else 0
     
     # Stochastic Signal
     k = latest['k'] if pd.notna(latest['k']) else None
