@@ -11,6 +11,8 @@ export interface OHLCV {
   mdi: number | null;
   k: number | null;
   d: number | null;
+  dmi_signal: number; // Added for DMI signal (0 or 1)
+  sto_signal: number; // Added for Stochastic signal (0 or 1)
 }
 
 export interface IndicatorValues {

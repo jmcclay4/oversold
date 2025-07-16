@@ -26,6 +26,8 @@ const fetchStockData = async (ticker: string): Promise<OHLCV[]> => {
       mdi: d.mdi ?? null,
       k: d.k ?? null,
       d: d.d ?? null,
+      dmi_signal: d.dmi_signal ?? 0,
+      sto_signal: d.sto_signal ?? 0,
     }));
     console.log(`Fetched data for ${ticker}, latest:`, ohlcv[ohlcv.length - 1]);
     return ohlcv;
@@ -207,8 +209,6 @@ export const analyzeStockTicker = async (ticker: string): Promise<StockAnalysisR
     const mdi = latestIndicators.mdi;
     const prev_pdi = previousIndicators?.pdi ?? null;
     const prev_mdi = previousIndicators?.mdi ?? null;
-    const prev_prev_pdi = previousPreviousIndicators?.pdi ?? null;
-    const prev_prev_mdi = previousPreviousIndicators?.mdi ?? null;
     
     const dmiCrossLast2Days = (
       (prev_pdi != null && prev_mdi != null && prev_pdi > prev_mdi && (previousPreviousIndicators?.pdi ?? prev_pdi) <= (previousPreviousIndicators?.mdi ?? prev_mdi)) ||
@@ -227,11 +227,9 @@ export const analyzeStockTicker = async (ticker: string): Promise<StockAnalysisR
     const d_val = latestIndicators.d;
     const prev_k = previousIndicators?.k ?? null;
     const prev_d = previousIndicators?.d ?? null;
-    const prev_prev_k = previousPreviousIndicators?.k ?? null;
-    const prev_prev_d = previousPreviousIndicators?.d ?? null;
     
     const stoCrossLast3Days = (
-      (prev_k != null && prev_d != null && prev_k > prev_d && (prev_prev_k ?? prev_k) <= (prev_prev_d ?? prev_d) && (Math.min(prev_k, prev_d) <= 22 || Math.min(k ?? prev_k, d_val ?? prev_d) <= 22)) ||
+      (prev_k != null && prev_d != null && prev_k > prev_d && (previousPreviousIndicators?.k ?? prev_k) <= (previousPreviousIndicators?.d ?? prev_d) && (Math.min(prev_k, prev_d) <= 22 || Math.min(k ?? prev_k, d_val ?? prev_d) <= 22)) ||
       (k != null && d_val != null && k > d_val && prev_k <= prev_d && (Math.min(k, d_val) <= 22 || Math.min(prev_k, prev_d) <= 22))
     );
     const stoIncreasingAndClose = k != null && prev_k != null && k > prev_k && d_val != null && Math.abs(k - d_val) <= 3 && (k <= 21 || d_val <= 21);
@@ -315,22 +313,12 @@ export const analyzeTrackedStocks = async (tickers: string[]): Promise<StockAnal
         let meetsCriteria = false;
         let message = "";
         
-        // DMI Logic (approximate for latest only; no multi-day cross, so only closeness)
-        const pdi = latestIndicators.pdi;
-        const mdi = latestIndicators.mdi;
-        const dmiWithin1Percent = pdi != null && mdi != null && mdi > 0 && Math.abs(pdi - mdi) / Math.max(pdi, mdi) <= 0.01;
-        
-        if (dmiWithin1Percent) {
+        // Use DB signals
+        if (latestOhlcv.dmi_signal === 1) {
           statusTags.push('DMI');
           meetsCriteria = true;
         }
-        
-        // Stochastic Logic (approximate for latest only; no multi-day, so only close + oversold)
-        const k = latestIndicators.k;
-        const d_val = latestIndicators.d;
-        const stoCloseAndOversold = k != null && d_val != null && Math.abs(k - d_val) <= 3 && (k <= 21 || d_val <= 21);
-        
-        if (stoCloseAndOversold) {
+        if (latestOhlcv.sto_signal === 1) {
           statusTags.push('STO');
           meetsCriteria = true;
         }
