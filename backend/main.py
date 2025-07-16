@@ -41,7 +41,7 @@ HISTORY_MONTHS = 6  # Limit to 6 months of data
 def init_db():
     """
     Initializes the SQLite database with two tables:
-    - 'ohlcv': Stores stock data (ticker, date, OHLCV, company name, indicators).
+    - 'ohlcv': Stores stock data (ticker, date, OHLCV, company name, indicators, signals).
     - 'metadata': Stores key-value pairs (e.g., last_ohlcv_update date).
     Called on app startup if DB or tables are missing.
     """
@@ -67,13 +67,23 @@ def init_db():
                 mdi REAL,
                 k REAL,
                 d REAL,
-                dmi_signal INTEGER,
-                sto_signal INTEGER,
+                dmi_signal INTEGER DEFAULT 0,
+                sto_signal INTEGER DEFAULT 0,
                 PRIMARY KEY (ticker, date)
             )
         ''')
         
-        # Create metadata table for tracking overall last update (min max date across tickers)
+        # Check if dmi_signal and sto_signal columns exist, add if missing
+        cursor.execute("PRAGMA table_info(ohlcv)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'dmi_signal' not in columns:
+            cursor.execute("ALTER TABLE ohlcv ADD COLUMN dmi_signal INTEGER DEFAULT 0")
+            logger.info("Added dmi_signal column to ohlcv table")
+        if 'sto_signal' not in columns:
+            cursor.execute("ALTER TABLE ohlcv ADD COLUMN sto_signal INTEGER DEFAULT 0")
+            logger.info("Added sto_signal column to ohlcv table")
+        
+        # Create metadata table for tracking overall last update
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS metadata (
                 key TEXT PRIMARY KEY,
@@ -162,35 +172,41 @@ def compute_signals(df: pd.DataFrame) -> tuple[int, int]:
     prev_prev = df.iloc[-3]
     
     # DMI Signal
-    pdi = latest['pdi']
-    mdi = latest['mdi']
-    prev_pdi = prev['pdi']
-    prev_mdi = prev['mdi']
-    prev_prev_pdi = prev_prev['pdi']
-    prev_prev_mdi = prev_prev['mdi']
+    pdi = latest['pdi'] if pd.notna(latest['pdi']) else None
+    mdi = latest['mdi'] if pd.notna(latest['mdi']) else None
+    prev_pdi = prev['pdi'] if pd.notna(prev['pdi']) else None
+    prev_mdi = prev['mdi'] if pd.notna(prev['mdi']) else None
+    prev_prev_pdi = prev_prev['pdi'] if pd.notna(prev_prev['pdi']) else None
+    prev_prev_mdi = prev_prev['mdi'] if pd.notna(prev_prev['mdi']) else None
     
-    cross_last2 = (
-        (prev_pdi > prev_mdi and prev_prev_pdi <= prev_prev_mdi) or
-        (pdi > mdi and prev_pdi <= prev_mdi)
-    )
-    within_5pct = pdi is not np.nan and mdi is not np.nan and mdi > 0 and abs(pdi - mdi) / max(pdi, mdi) <= 0.05
-    within_1pct = pdi is not np.nan and mdi is not np.nan and mdi > 0 and abs(pdi - mdi) / max(pdi, mdi) <= 0.01
-    dmi_signal = 1 if (cross_last2 and within_5pct) or within_1pct else 0
+    dmi_signal = 0
+    if (pdi is not None and mdi is not None and prev_pdi is not None and prev_mdi is not None and
+        prev_prev_pdi is not None and prev_prev_mdi is not None):
+        cross_last2 = (
+            (prev_pdi > prev_mdi and prev_prev_pdi <= prev_prev_mdi) or
+            (pdi > mdi and prev_pdi <= prev_mdi)
+        )
+        within_5pct = mdi > 0 and abs(pdi - mdi) / max(pdi, mdi) <= 0.05
+        within_1pct = mdi > 0 and abs(pdi - mdi) / max(pdi, mdi) <= 0.01
+        dmi_signal = 1 if (cross_last2 and within_5pct) or within_1pct else 0
     
     # Stochastic Signal
-    k = latest['k']
-    d_val = latest['d']
-    prev_k = prev['k']
-    prev_d = prev['d']
-    prev_prev_k = prev_prev['k']
-    prev_prev_d = prev_prev['d']
+    k = latest['k'] if pd.notna(latest['k']) else None
+    d_val = latest['d'] if pd.notna(latest['d']) else None
+    prev_k = prev['k'] if pd.notna(prev['k']) else None
+    prev_d = prev['d'] if pd.notna(prev['d']) else None
+    prev_prev_k = prev_prev['k'] if pd.notna(prev_prev['k']) else None
+    prev_prev_d = prev_prev['d'] if pd.notna(prev_prev['d']) else None
     
-    cross_last3 = (
-        (prev_k > prev_d and prev_prev_k <= prev_prev_d and (min(prev_k, prev_d) <= 22 or min(k, d_val) <= 22)) or
-        (k > d_val and prev_k <= prev_d and (min(k, d_val) <= 22 or min(prev_k, prev_d) <= 22))
-    )
-    increasing_close = k > prev_k and abs(k - d_val) <= 3 and (k <= 21 or d_val <= 21)
-    sto_signal = 1 if cross_last3 or increasing_close else 0
+    sto_signal = 0
+    if (k is not None and d_val is not None and prev_k is not None and prev_d is not None and
+        prev_prev_k is not None and prev_prev_d is not None):
+        cross_last3 = (
+            (prev_k > prev_d and prev_prev_k <= prev_prev_d and (min(prev_k, prev_d) <= 22 or min(k, d_val) <= 22)) or
+            (k > d_val and prev_k <= prev_d and (min(k, d_val) <= 22 or min(prev_k, prev_d) <= 22))
+        )
+        increasing_close = k > prev_k and abs(k - d_val) <= 3 and (k <= 21 or d_val <= 21)
+        sto_signal = 1 if cross_last3 or increasing_close else 0
     
     return dmi_signal, sto_signal
 
@@ -428,16 +444,19 @@ def update_data():
                     logger.info(f"Calculating indicators for {ticker} on dates from {min_date} to {max_date}")
                     combined_df = calculate_indicators(combined_df)
                     
-                    # Step 5: Insert new rows
+                    # Step 5: Insert new rows with signals
                     count = 0
                     ticker_max_date = last_date_str
                     for _, row in combined_df.iterrows():
                         if row['date'] > ticker_max_date:
+                            # Compute signals for the new row (use last 3 rows including this one)
+                            last3 = combined_df[combined_df['date'] <= row['date']].tail(3)
+                            dmi_signal, sto_signal = compute_signals(last3) if len(last3) >= 3 else (0, 0)
                             cursor.execute('''
                                 INSERT OR REPLACE INTO ohlcv (
                                     ticker, date, open, high, low, close, volume, 
-                                    company_name, adx, pdi, mdi, k, d
-                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    company_name, adx, pdi, mdi, k, d, dmi_signal, sto_signal
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             ''', (
                                 ticker,
                                 row['date'],
@@ -451,7 +470,9 @@ def update_data():
                                 row['pdi'] if pd.notna(row['pdi']) else None,
                                 row['mdi'] if pd.notna(row['mdi']) else None,
                                 row['k'] if pd.notna(row['k']) else None,
-                                row['d'] if pd.notna(row['d']) else None
+                                row['d'] if pd.notna(row['d']) else None,
+                                dmi_signal,
+                                sto_signal
                             ))
                             count += 1
                             logger.info(f"Added data point for {ticker} on {row['date']}")
@@ -478,11 +499,11 @@ def update_data():
         # Trim old data after updates
         trim_old_data(conn)
         
-        # Recalculate indicators for all tickers (since periods changed)
+        # Recalculate indicators and signals for all tickers
         for ticker in all_tickers:
             recalculate_indicators(conn, ticker)
         
-        # Update metadata to MAX of all tickers' MAX(date) for frontend (overall "up to" date)
+        # Update metadata to MAX of all tickers' MAX(date) for frontend
         logger.info("Calculating max max date across all tickers for metadata")
         cursor.execute("""
             SELECT MAX(last_date) FROM (SELECT MAX(date) as last_date FROM ohlcv GROUP BY ticker)
