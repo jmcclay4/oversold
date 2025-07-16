@@ -156,8 +156,9 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
         tr = pd.concat([high - low, abs(high - close.shift()), abs(low - close.shift())], axis=1).max(axis=1)
         atr = tr.rolling(window=period_dmi_adx).mean()
         
-        plus_dm = delta_high.where(delta_high > 0, 0)
-        minus_dm = abs(delta_low.where(delta_low > 0, 0))
+        # Calculate +DM and -DM with mutual exclusivity
+        plus_dm = delta_high.where((delta_high > 0) & (delta_high > delta_low.abs()), 0)
+        minus_dm = delta_low.abs().where((delta_low > 0) & (delta_low.abs() > delta_high), 0)
         
         plus_di = 100 * plus_dm.rolling(window=period_dmi_adx).mean() / atr
         minus_di = 100 * minus_dm.rolling(window=period_dmi_adx).mean() / atr
