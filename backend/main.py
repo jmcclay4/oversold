@@ -100,6 +100,33 @@ def init_db():
     finally:
         conn.close()
 
+def migrate_db():
+    """
+    Explicitly migrates the database to ensure dmi_signal and sto_signal columns exist.
+    """
+    logger.info("Running database migration")
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Check and add dmi_signal and sto_signal columns if missing
+        cursor.execute("PRAGMA table_info(ohlcv)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'dmi_signal' not in columns:
+            cursor.execute("ALTER TABLE ohlcv ADD COLUMN dmi_signal INTEGER DEFAULT 0")
+            logger.info("Added dmi_signal column to ohlcv table")
+        if 'sto_signal' not in columns:
+            cursor.execute("ALTER TABLE ohlcv ADD COLUMN sto_signal INTEGER DEFAULT 0")
+            logger.info("Added sto_signal column to ohlcv table")
+        
+        conn.commit()
+        logger.info("Database migration completed successfully")
+    except Exception as e:
+        logger.error(f"Error during database migration: {e}")
+        raise
+    finally:
+        conn.close()
+
 def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
     Calculates technical indicators for a DataFrame:
@@ -635,3 +662,12 @@ async def manual_recalculate_indicators():
     except Exception as e:
         logger.error(f"Error during manual recalculation: {e}")
         raise HTTPException(status_code=500, detail="Error recalculating indicators")
+
+@app.post("/migrate-db")
+async def manual_migrate_db():
+    try:
+        migrate_db()
+        return {"message": "Database migration completed successfully"}
+    except Exception as e:
+        logger.error(f"Error during manual migration: {e}")
+        raise HTTPException(status_code=500, detail="Error migrating database")
