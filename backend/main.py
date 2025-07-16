@@ -134,7 +134,7 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     - +DI (Plus Directional Indicator, 9-day)
     - -DI (Minus Directional Indicator, 9-day)
     - Stochastic %K (9-day, slow with 3,3 smoothing) and %D (3-day SMA)
-    Uses pandas rolling operations on small DFs.
+    Uses Wilder's smoothing for DMI/ADX, simple moving average for stochastic.
     Converts outputs to float32 for memory efficiency.
     Expects lowercase columns: 'open', 'high', 'low', 'close', 'volume'.
     """
@@ -150,21 +150,34 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
         period_stoch = 9
         period_slow = 3
         
-        # DMI/ADX (9,9)
+        # DMI/ADX (9,9) with Wilder's smoothing
         delta_high = high.diff()
         delta_low = low.diff()
         tr = pd.concat([high - low, abs(high - close.shift()), abs(low - close.shift())], axis=1).max(axis=1)
-        atr = tr.rolling(window=period_dmi_adx).mean()
         
         # Calculate +DM and -DM with mutual exclusivity
         plus_dm = delta_high.where((delta_high > 0) & (delta_high > delta_low.abs()), 0)
         minus_dm = delta_low.abs().where((delta_low > 0) & (delta_low.abs() > delta_high), 0)
         
-        plus_di = 100 * plus_dm.rolling(window=period_dmi_adx).mean() / atr
-        minus_di = 100 * minus_dm.rolling(window=period_dmi_adx).mean() / atr
+        # Wilder's smoothing for +DM, -DM, and TR
+        def wilder_smooth(series, period):
+            smoothed = series.copy()
+            smoothed[:period] = series[:period].mean()  # First value is simple mean
+            for i in range(period, len(series)):
+                smoothed.iloc[i] = (smoothed.iloc[i-1] * (period - 1) + series.iloc[i]) / period
+            return smoothed
         
+        smoothed_plus_dm = wilder_smooth(plus_dm, period_dmi_adx)
+        smoothed_minus_dm = wilder_smooth(minus_dm, period_dmi_adx)
+        smoothed_tr = wilder_smooth(tr, period_dmi_adx)
+        
+        # Calculate +DI and -DI
+        plus_di = 100 * smoothed_plus_dm / smoothed_tr
+        minus_di = 100 * smoothed_minus_dm / smoothed_tr
+        
+        # Calculate DX and ADX
         dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
-        adx = dx.rolling(window=period_dmi_adx).mean()
+        adx = wilder_smooth(dx, period_dmi_adx)
         
         # Stochastic (9,3,3) - Slow Stochastic
         lowest_low = low.rolling(window=period_stoch).min()
