@@ -67,6 +67,8 @@ def init_db():
                 mdi REAL,
                 k REAL,
                 d REAL,
+                dmi_signal INTEGER,
+                sto_signal INTEGER,
                 PRIMARY KEY (ticker, date)
             )
         ''')
@@ -145,6 +147,53 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
         logger.error(f"Error calculating indicators: {e}")
         raise
 
+def compute_signals(df: pd.DataFrame) -> tuple[int, int]:
+    """
+    Computes DMI and Stochastic signals for the latest row based on last 3 days.
+    Returns (dmi_signal, sto_signal) as 1/0.
+    Assumes df is sorted by date, with at least 3 rows for full check.
+    """
+    if len(df) < 3:
+        return 0, 0  # Insufficient data
+    
+    # Latest (day 0), previous (day -1), prev_prev (day -2)
+    latest = df.iloc[-1]
+    prev = df.iloc[-2]
+    prev_prev = df.iloc[-3]
+    
+    # DMI Signal
+    pdi = latest['pdi']
+    mdi = latest['mdi']
+    prev_pdi = prev['pdi']
+    prev_mdi = prev['mdi']
+    prev_prev_pdi = prev_prev['pdi']
+    prev_prev_mdi = prev_prev['mdi']
+    
+    cross_last2 = (
+        (prev_pdi > prev_mdi and prev_prev_pdi <= prev_prev_mdi) or
+        (pdi > mdi and prev_pdi <= prev_mdi)
+    )
+    within_5pct = pdi is not np.nan and mdi is not np.nan and mdi > 0 and abs(pdi - mdi) / max(pdi, mdi) <= 0.05
+    within_1pct = pdi is not np.nan and mdi is not np.nan and mdi > 0 and abs(pdi - mdi) / max(pdi, mdi) <= 0.01
+    dmi_signal = 1 if (cross_last2 and within_5pct) or within_1pct else 0
+    
+    # Stochastic Signal
+    k = latest['k']
+    d_val = latest['d']
+    prev_k = prev['k']
+    prev_d = prev['d']
+    prev_prev_k = prev_prev['k']
+    prev_prev_d = prev_prev['d']
+    
+    cross_last3 = (
+        (prev_k > prev_d and prev_prev_k <= prev_prev_d and (min(prev_k, prev_d) <= 22 or min(k, d_val) <= 22)) or
+        (k > d_val and prev_k <= prev_d and (min(k, d_val) <= 22 or min(prev_k, prev_d) <= 22))
+    )
+    increasing_close = k > prev_k and abs(k - d_val) <= 3 and (k <= 21 or d_val <= 21)
+    sto_signal = 1 if cross_last3 or increasing_close else 0
+    
+    return dmi_signal, sto_signal
+
 def get_tracked_tickers():
     """
     Retrieves unique tickers from the ohlcv table.
@@ -190,7 +239,7 @@ def trim_old_data(conn):
 
 def recalculate_indicators(conn, ticker):
     """
-    Recalculates indicators for a ticker's data and updates the DB.
+    Recalculates indicators and signals for a ticker's data and updates the DB.
     """
     logger.info(f"Recalculating indicators for {ticker}")
     df = pd.read_sql_query("SELECT * FROM ohlcv WHERE ticker = ? ORDER BY date", conn, params=(ticker,))
@@ -211,8 +260,17 @@ def recalculate_indicators(conn, ticker):
             ticker,
             row['date']
         ))
+    # Compute signals for latest row (last 3 rows)
+    if len(df) >= 3:
+        last3 = df.iloc[-3:]
+        dmi_signal, sto_signal = compute_signals(last3)
+        latest_date = df.iloc[-1]['date']
+        cursor.execute('''
+            UPDATE ohlcv SET dmi_signal = ?, sto_signal = ?
+            WHERE ticker = ? AND date = ?
+        ''', (dmi_signal, sto_signal, ticker, latest_date))
     conn.commit()
-    logger.info(f"Updated indicators for {ticker}")
+    logger.info(f"Updated indicators and signals for {ticker}")
 
 def update_data():
     """
