@@ -663,9 +663,7 @@ def wilder_smooth(series, period):
 
     return {"message": f"Debug logs for {ticker} generated; check server logs"}
 
-@app.get("/debug-indicators")
-async def debug_indicators_endpoint(ticker: str = "DLTR"):
-    return debug_indicators(ticker)
+
 
 @app.get("/stocks/tickers")
 async def get_tickers():
@@ -783,4 +781,8 @@ async def manual_migrate_db():
     except Exception as e:
         logger.error(f"Error during manual migration: {e}")
         raise HTTPException(status_code=500, detail="Error migrating database")
+    
+@app.get("/debug-indicators/{ticker}")
+async def debug_indicators_endpoint(ticker: str = "DLTR"):
+    return debug_indicators(ticker)
     
