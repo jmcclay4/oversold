@@ -21,7 +21,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
   const [selectedPeriod, setSelectedPeriod] = useState<'1m' | '3m' | '6m'>('6m');
 
   if (!stockData || !stockData.historicalDates || !stockData.historicalClosePrices) {
-    return <div className="text-gray-400 text-center">No chart data available.</div>;
+    return <div style={{ color: '#D1D5DB', textAlign: 'center' }}>No chart data available.</div>;
   }
 
   // Filter data based on selected period
@@ -41,6 +41,15 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
   const filteredK = filteredIndices.map(i => stockData.historicalK![i]);
   const filteredD = filteredIndices.map(i => stockData.historicalD![i]);
 
+  // Log filtered data for debugging
+  console.log(`Price Chart Data for ${stockData.ticker} (${selectedPeriod}):`, {
+    dates: filteredDates,
+    open: filteredOpen,
+    high: filteredHigh,
+    low: filteredLow,
+    close: filteredClose,
+  });
+
   const priceChartData = {
     labels: filteredDates,
     datasets: [
@@ -56,8 +65,8 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
         })),
         borderColor: 'transparent',
         color: {
-          up: 'green',
-          down: 'red',
+          up: 'white',
+          down: 'black',
         },
         yAxisID: 'y-price',
       },
@@ -70,8 +79,8 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: '+DI',
         data: filteredPdi,
-        borderColor: 'blue',
-        borderWidth: 1, // Thinner lines (50% of default 2)
+        borderColor: '#3CBABA', // blue
+        borderWidth: 1,
         fill: false,
         yAxisID: 'y-indicators',
         pointRadius: 0,
@@ -80,7 +89,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: '-DI',
         data: filteredMdi,
-        borderColor: 'red',
+        borderColor: '#FF7373', // red
         borderWidth: 1,
         fill: false,
         yAxisID: 'y-indicators',
@@ -90,7 +99,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: 'ADX',
         data: filteredAdx,
-        borderColor: 'white',
+        borderColor: '#FFFFFF', // white
         borderWidth: 1,
         fill: false,
         yAxisID: 'y-indicators',
@@ -106,7 +115,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: '%K',
         data: filteredK,
-        borderColor: 'blue',
+        borderColor: '#3CBABA', // blue
         borderWidth: 1,
         fill: false,
         yAxisID: 'y-stochastic',
@@ -116,7 +125,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: '%D',
         data: filteredD,
-        borderColor: 'red',
+        borderColor: '#FF7373', // red
         borderWidth: 1,
         fill: false,
         yAxisID: 'y-stochastic',
