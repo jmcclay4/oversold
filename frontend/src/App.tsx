@@ -224,38 +224,38 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-black text-gray-200 p-4 sm:p-6 flex flex-col">
-      <header className="mb-6 flex justify-between items-center">
-        <h1 className="text-xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-gray-400 via-gray-300 to-gray-500 uppercase text-left tracking-wider" style={{ fontFamily: '"Special Gothic Expanded One", sans-serif' }}>
+    <div style={{ minHeight: '100vh', backgroundColor: '#0f0f0f', color: '#D1D5DB', padding: '16px', fontSize: '16px', display: 'flex', flexDirection: 'column' }}>
+      <header style={{ marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h1 style={{ fontSize: '20px', fontWeight: '800', color: 'transparent', backgroundClip: 'text', backgroundImage: 'linear-gradient(to right, #9CA3AF, #6B7280, #4B5563)', textTransform: 'uppercase', textAlign: 'left', letterSpacing: '0.1em', fontFamily: '"Special Gothic Expanded One", sans-serif' }}>
           OVERSOLD
         </h1>
-        <div className="text-right text-xs text-gray-500">
+        <div style={{ textAlign: 'right', fontSize: '12px', color: '#6B7280' }}>
           {/* Timestamps removed */}
         </div>
       </header>
 
-      <main className="flex-grow max-w-full mx-auto w-full px-2">
-        <div className="mb-6 bg-gray-900 shadow-xl rounded-xl p-4">
+      <main style={{ flexGrow: 1, maxWidth: '100%', margin: '0 auto', width: '100%', paddingLeft: '8px', paddingRight: '8px' }}>
+        <div style={{ marginBottom: '24px', backgroundColor: '#1a1a1a', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)', borderRadius: '12px', padding: '16px' }}>
           <StockChart stockData={selectedStockDataForChart} />
         </div>
 
-        <div className="my-4 p-4 bg-gray-900 shadow-xl rounded-xl flex flex-col sm:flex-row gap-4 items-center justify-between">
+        <div style={{ margin: '16px 0', padding: '16px', backgroundColor: '#1a1a1a', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '16px', alignItems: 'center', justifyContent: 'space-between' }}>
           <input
             type="text"
             placeholder="Search by ticker or company..."
-            className="flex-grow p-2 border border-gray-600 bg-gray-800 text-gray-200 rounded-lg focus:ring-2 focus:ring-gray-500 w-full sm:w-auto"
+            style={{ flexGrow: 1, padding: '8px', border: '1px solid #333333', backgroundColor: '#1a1a1a', color: '#D1D5DB', borderRadius: '8px', outline: 'none', width: '100%' }}
             value={filterCriteria.searchTerm ?? ''}
             onChange={(e) => setFilterCriteria({ searchTerm: e.target.value })}
           />
           <button
             onClick={() => setShowMenu(!showMenu)}
-            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-gray-200"
+            style={{ padding: '8px 16px', backgroundColor: '#1a1a1a', color: '#D1D5DB', borderRadius: '8px', cursor: 'pointer' }}
           >
             Manage Stocks
           </button>
           <button
             onClick={fetchInitialData}
-            className="px-4 py-2 bg-gray-600 hover:bg-gray-500 rounded-lg text-white"
+            style={{ padding: '8px 16px', backgroundColor: '#333333', color: '#D1D5DB', borderRadius: '8px', cursor: 'pointer' }}
             aria-label="Refresh data"
           >
             Refresh
@@ -263,30 +263,30 @@ const App: React.FC = () => {
         </div>
 
         {showMenu && (
-          <div className="mb-4 p-4 bg-gray-900 shadow-xl rounded-xl">
-            <h2 className="text-lg font-bold text-white mb-2">Manage Stocks</h2>
-            <div className="flex gap-2 mb-4">
+          <div style={{ marginBottom: '16px', padding: '16px', backgroundColor: '#1a1a1a', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)', borderRadius: '12px' }}>
+            <h2 style={{ fontSize: '18px', fontWeight: 'bold', color: '#D1D5DB', marginBottom: '8px' }}>Manage Stocks</h2>
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
               <input
                 type="text"
                 placeholder="Add ticker (e.g., TSLA)"
-                className="flex-grow p-2 border border-gray-600 bg-gray-800 text-white rounded-lg"
+                style={{ flexGrow: 1, padding: '8px', border: '1px solid #333333', backgroundColor: '#1a1a1a', color: '#D1D5DB', borderRadius: '8px' }}
                 value={newTicker}
                 onChange={(e) => setNewTicker(e.target.value)}
               />
               <button
                 onClick={addTicker}
-                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 rounded-lg text-white"
+                style={{ padding: '8px 16px', backgroundColor: '#333333', color: '#D1D5DB', borderRadius: '8px' }}
               >
                 Add
               </button>
             </div>
-            <div className="max-h-[200px] overflow-y-auto">
+            <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
               {customTickers.map(ticker => (
-                <div key={ticker} className="flex justify-between items-center py-2 border-b border-gray-600">
-                  <span className="text-white">{ticker}</span>
+                <div key={ticker} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #333333' }}>
+                  <span style={{ color: '#D1D5DB' }}>{ticker}</span>
                   <button
                     onClick={() => removeTicker(ticker)}
-                    className="text-red-400 hover:text-red-300"
+                    style={{ color: '#FF7373', cursor: 'pointer' }}
                   >
                     Remove
                   </button>
@@ -300,12 +300,12 @@ const App: React.FC = () => {
         {isLoading && allAnalysisResults.length === 0 && <LoadingSpinner />}
         
         {!isLoading && allAnalysisResults.length === 0 && !globalError && (
-          <div className="text-center py-10 px-6 bg-gray-800 rounded-xl">
-            <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <div style={{ textAlign: 'center', padding: '40px 24px', backgroundColor: '#1a1a1a', borderRadius: '12px' }}>
+            <svg style={{ margin: '0 auto', height: '48px', width: '48px', color: '#6B7280' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V7a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2z" />
             </svg>
-            <h3 className="mt-2 text-lg font-medium text-white">No Data Loaded</h3>
-            <p className="mt-1 text-sm text-gray-400">
+            <h3 style={{ marginTop: '8px', fontSize: '18px', fontWeight: 'medium', color: '#D1D5DB' }}>No Data Loaded</h3>
+            <p style={{ marginTop: '4px', fontSize: '14px', color: '#6B7280' }}>
               The application automatically loads tracked stocks.
             </p>
           </div>
@@ -316,11 +316,11 @@ const App: React.FC = () => {
         )}
         
       </main>
-      <footer className="text-center mt-8 py-4 border-t border-gray-600">
-        <p className="text-sm text-gray-400">
+      <footer style={{ textAlign: 'center', marginTop: '32px', padding: '16px 0', borderTop: '1px solid #333333' }}>
+        <p style={{ fontSize: '14px', color: '#6B7280' }}>
           OVERSOLD Dashboard. For educational purposes. Not financial advice.
         </p>
-        <p className="text-xs text-gray-500 mt-1">
+        <p style={{ fontSize: '12px', color: '#4B5563', marginTop: '4px' }}>
           Data provided by Yahoo Finance and Alpaca Markets.
         </p>
       </footer>

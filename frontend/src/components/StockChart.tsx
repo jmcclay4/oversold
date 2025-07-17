@@ -9,9 +9,6 @@ import { DateTime } from 'luxon';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, AnnotationPlugin, LineController, CandlestickController, CandlestickElement);
 
-ChartJS.defaults.color = '#D1D5DB';
-ChartJS.defaults.font.family = 'Inter, sans-serif';
-
 interface StockChartProps {
   stockData: StockAnalysisResult | null;
 }
@@ -21,7 +18,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
   const [selectedPeriod, setSelectedPeriod] = useState<'1m' | '3m' | '6m'>('6m');
 
   if (!stockData || !stockData.historicalDates || !stockData.historicalClosePrices) {
-    return <div style={{ color: '#D1D5DB', textAlign: 'center' }}>No chart data available.</div>;
+    return <div style={{color: '#D1D5DB', textAlign: 'center'}}>No chart data available.</div>;
   }
 
   // Filter data based on selected period
@@ -41,14 +38,9 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
   const filteredK = filteredIndices.map(i => stockData.historicalK![i]);
   const filteredD = filteredIndices.map(i => stockData.historicalD![i]);
 
-  // Log filtered data for debugging
-  console.log(`Price Chart Data for ${stockData.ticker} (${selectedPeriod}):`, {
-    dates: filteredDates,
-    open: filteredOpen,
-    high: filteredHigh,
-    low: filteredLow,
-    close: filteredClose,
-  });
+  // Calculate min/max for price y-axis
+  const priceMin = Math.min(...filteredLow) * 0.95;
+  const priceMax = Math.max(...filteredHigh) * 1.05;
 
   const priceChartData = {
     labels: filteredDates,
@@ -65,8 +57,8 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
         })),
         borderColor: 'transparent',
         color: {
-          up: 'white',
-          down: 'black',
+          up: 'green',
+          down: 'red',
         },
         yAxisID: 'y-price',
       },
@@ -152,7 +144,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
     type: 'linear' as const,
     grid: {
       drawOnChartArea: true,
-      color: 'rgb(75, 85, 99)', // gray-600
+      color: '#333333', // Dark gray for grid
     },
     ticks: {
       stepSize: 20,
@@ -170,14 +162,14 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
   } : undefined;
 
   return (
-    <div className="w-full max-w-[1200px] mx-auto">
+    <div style={{ width: '100%', maxWidth: '1200px', margin: '0 auto' }}>
       {/* Price Chart with Overlay Selector */}
-      <div className="mb-4 relative" style={{ height: '300px', width: '100%' }}>
-        <div className="absolute top-2 right-2 z-10">
+      <div style={{ marginBottom: '16px', position: 'relative', height: '300px', width: '100%' }}>
+        <div style={{ position: 'absolute', top: '8px', right: '8px', zIndex: 10 }}>
           <select
             value={selectedPeriod}
             onChange={(e) => setSelectedPeriod(e.target.value as '1m' | '3m' | '6m')}
-            className="p-1 bg-gray-700 text-gray-300 rounded-lg focus:ring-2 focus:ring-gray-500 text-sm"
+            style={{ padding: '4px', backgroundColor: '#1a1a1a', color: '#D1D5DB', borderRadius: '4px', border: '1px solid #1a1a1a' }}
           >
             <option value="1m">1m</option>
             <option value="3m">3m</option>
@@ -212,16 +204,18 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
                   stepSize: undefined,
                   callback: (value: number | string): string => Number(value).toFixed(2),
                 },
+                min: priceMin,
+                max: priceMax,
                 grid: {
                   ...axisConfig.grid,
-                  drawOnChartArea: false, // Only right axis draws grid
+                  drawOnChartArea: false,
                 },
               },
             },
             plugins: {
               tooltip: {
                 enabled: true,
-                backgroundColor: 'rgba(30, 41, 59, 0.9)',
+                backgroundColor: '#1a1a1a',
                 titleColor: '#D1D5DB',
                 bodyColor: '#D1D5DB',
               },
@@ -239,7 +233,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       </div>
 
       {/* DMI/ADX Chart */}
-      <div className="mb-4" style={{ height: '250px', width: '100%' }}>
+      <div style={{ marginBottom: '16px', height: '250px', width: '100%' }}>
         <Chart
           type="line"
           data={adxDmiChartData}
@@ -274,7 +268,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
             plugins: {
               tooltip: {
                 enabled: true,
-                backgroundColor: 'rgba(30, 41, 59, 0.9)',
+                backgroundColor: '#1a1a1a',
                 titleColor: '#D1D5DB',
                 bodyColor: '#D1D5DB',
               },
@@ -327,7 +321,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
             plugins: {
               tooltip: {
                 enabled: true,
-                backgroundColor: 'rgba(30, 41, 59, 0.9)',
+                backgroundColor: '#1a1a1a',
                 titleColor: '#D1D5DB',
                 bodyColor: '#D1D5DB',
               },
@@ -348,3 +342,4 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
 };
 
 export default StockChart;
+
