@@ -573,6 +573,100 @@ def update_data():
         if conn:
             conn.close()
 
+def debug_indicators(ticker: str = "DLTR"):
+    """
+    Endpoint to log comprehensive documentation for indicator computations over the last 3 days for a ticker.
+    Logs raw data, step-by-step calculations, and signals.
+    """
+    logger.info(f"Debugging indicators for {ticker}")
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query("SELECT * FROM ohlcv WHERE ticker = ? ORDER BY date DESC LIMIT 3", conn, params=(ticker,))
+    conn.close()
+    if df.empty:
+        logger.info(f"No data for {ticker}")
+        return {"message": f"No data for {ticker}"}
+        df = df.sort_values('date')  # Ensure ascending for calculations
+        logger.info(f"Raw data for last 3 days:\n{df.to_string(index=False)}")
+
+    #Recompute indicators step-by-step and log
+    high = df['high']
+    low = df['low']
+    close = df['close']
+
+    #Periods
+    period_dmi_adx = 9
+    period_stoch = 9
+    period_slow = 3
+
+    #DMI/ADX steps
+    delta_high = high.diff()
+    delta_low = low.diff()
+    logger.info(f"Delta High: {delta_high.to_string()}")
+    logger.info(f"Delta Low: {delta_low.to_string()}")
+
+    tr = pd.concat([high - low, abs(high - close.shift()), abs(low - close.shift())], axis=1).max(axis=1)
+    logger.info(f"True Range (TR): {tr.to_string()}")
+
+    plus_dm = delta_high.where((delta_high > 0) & (delta_high > delta_low.abs()), 0)
+    minus_dm = delta_low.abs().where((delta_low > 0) & (delta_low.abs() > delta_high), 0)
+    logger.info(f"+DM: {plus_dm.to_string()}")
+    logger.info(f"-DM: {minus_dm.to_string()}")
+
+#Wilder's smoothing (since only 3 days, smoothing is limited; log as is)
+def wilder_smooth(series, period):
+    smoothed = series.copy()
+    if len(series) >= period:
+        smoothed.iloc[period - 1] = series.iloc[:period].mean()
+    for i in range(period, len(series)):
+        smoothed.iloc[i] = (smoothed.iloc[i-1] * (period - 1) + series.iloc[i]) / period
+        return smoothed
+
+    smoothed_plus_dm = wilder_smooth(plus_dm, period_dmi_adx)
+    smoothed_minus_dm = wilder_smooth(minus_dm, period_dmi_adx)
+    smoothed_tr = wilder_smooth(tr, period_dmi_adx)
+    logger.info(f"Smoothed +DM: {smoothed_plus_dm.to_string()}")
+    logger.info(f"Smoothed -DM: {smoothed_minus_dm.to_string()}")
+    logger.info(f"Smoothed TR: {smoothed_tr.to_string()}")
+
+    plus_di = 100 * smoothed_plus_dm / smoothed_tr
+    minus_di = 100 * smoothed_minus_dm / smoothed_tr
+    logger.info(f"+DI: {plus_di.to_string()}")
+    logger.info(f"-DI: {minus_di.to_string()}")
+
+    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+    adx = wilder_smooth(dx, period_dmi_adx)
+    logger.info(f"DX: {dx.to_string()}")
+    logger.info(f"ADX: {adx.to_string()}")
+
+    #Stochastic steps
+    lowest_low = low.rolling(window=period_stoch).min()
+    highest_high = high.rolling(window=period_stoch).max()
+    k_fast = 100 * (close - lowest_low) / (highest_high - lowest_low)
+    k_slow = k_fast.rolling(window=period_slow).mean()
+    d = k_slow.rolling(window=period_slow).mean()
+    logger.info(f"Lowest Low: {lowest_low.to_string()}")
+    logger.info(f"Highest High: {highest_high.to_string()}")
+    logger.info(f"Fast %K: {k_fast.to_string()}")
+    logger.info(f"Slow %K: {k_slow.to_string()}")
+    logger.info(f"%D: {d.to_string()}")
+
+    #Signal computation
+    dmi_signal, sto_signal = compute_signals(df)
+    logger.info(f"DMI Signal: {dmi_signal}")
+    logger.info(f"Stochastic Signal: {sto_signal}")
+
+    #Log comparisons
+    logger.info("DMI Cross Last 2 Days Check: " + str((prev_pdi > prev_mdi and prev_prev_pdi <= prev_prev_mdi) or (pdi > mdi and prev_pdi <= prev_mdi)))
+    logger.info("Within 5%: " + str(within_5pct))
+    logger.info("Within 1%: " + str(within_1pct))
+    logger.info("No -DI Cross: " + str(no_minus_di_cross))
+
+    return {"message": f"Debug logs for {ticker} generated; check server logs"}
+
+@app.get("/debug-indicators/{ticker}")
+async def debug_indicators_endpoint(ticker: str = "DLTR"):
+    return debug_indicators(ticker)
+
 @app.get("/stocks/tickers")
 async def get_tickers():
     conn = sqlite3.connect(DB_PATH)
@@ -689,3 +783,4 @@ async def manual_migrate_db():
     except Exception as e:
         logger.error(f"Error during manual migration: {e}")
         raise HTTPException(status_code=500, detail="Error migrating database")
+    
