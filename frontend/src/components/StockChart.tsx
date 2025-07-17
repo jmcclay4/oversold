@@ -1,8 +1,8 @@
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, LineController } from 'chart.js';
 import AnnotationPlugin from 'chartjs-plugin-annotation';
-import 'chartjs-chart-financial'; // Import the financial chart plugin
-import { Chart } from 'react-chartjs-2';
+import 'chartjs-chart-financial';
 import { CandlestickController, CandlestickElement } from 'chartjs-chart-financial';
+import { Chart } from 'react-chartjs-2';
 import { StockAnalysisResult } from '../types';
 import { useState } from 'react';
 import { DateTime } from 'luxon';
@@ -54,11 +54,11 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
           l: filteredLow[i],
           c: filteredClose[i],
         })),
-        color: {
-          up: 'white',
-          down: 'black',
-        },
         borderColor: 'transparent',
+        color: {
+          up: 'green',
+          down: 'red',
+        },
         yAxisID: 'y-price',
       },
     ],
@@ -70,7 +70,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: '+DI',
         data: filteredPdi,
-        borderColor: '#9CA3AF', // gray-400
+        borderColor: 'blue',
         borderWidth: 1, // Thinner lines (50% of default 2)
         fill: false,
         yAxisID: 'y-indicators',
@@ -80,7 +80,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: '-DI',
         data: filteredMdi,
-        borderColor: '#6B7280', // gray-500
+        borderColor: 'red',
         borderWidth: 1,
         fill: false,
         yAxisID: 'y-indicators',
@@ -90,7 +90,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: 'ADX',
         data: filteredAdx,
-        borderColor: '#4B5563', // gray-600
+        borderColor: 'white',
         borderWidth: 1,
         fill: false,
         yAxisID: 'y-indicators',
@@ -106,7 +106,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: '%K',
         data: filteredK,
-        borderColor: '#9CA3AF', // gray-400
+        borderColor: 'blue',
         borderWidth: 1,
         fill: false,
         yAxisID: 'y-stochastic',
@@ -116,7 +116,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: '%D',
         data: filteredD,
-        borderColor: '#6B7280', // gray-500
+        borderColor: 'red',
         borderWidth: 1,
         fill: false,
         yAxisID: 'y-stochastic',
@@ -162,21 +162,19 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
 
   return (
     <div className="w-full max-w-[1200px] mx-auto">
-      {/* Period Selector */}
-      <div className="mb-4 flex justify-end">
-        <select
-          value={selectedPeriod}
-          onChange={(e) => setSelectedPeriod(e.target.value as '1m' | '3m' | '6m')}
-          className="p-2 bg-gray-700 text-gray-300 rounded-lg focus:ring-2 focus:ring-gray-500"
-        >
-          <option value="1m">1 Month</option>
-          <option value="3m">3 Months</option>
-          <option value="6m">6 Months</option>
-        </select>
-      </div>
-
-      {/* Price Chart */}
-      <div className="mb-4" style={{ height: '400px', width: '100%' }}>
+      {/* Price Chart with Overlay Selector */}
+      <div className="mb-4 relative" style={{ height: '300px', width: '100%' }}>
+        <div className="absolute top-2 right-2 z-10">
+          <select
+            value={selectedPeriod}
+            onChange={(e) => setSelectedPeriod(e.target.value as '1m' | '3m' | '6m')}
+            className="p-1 bg-gray-700 text-gray-300 rounded-lg focus:ring-2 focus:ring-gray-500 text-sm"
+          >
+            <option value="1m">1m</option>
+            <option value="3m">3m</option>
+            <option value="6m">6m</option>
+          </select>
+        </div>
         <Chart
           type="candlestick"
           data={priceChartData}
@@ -232,7 +230,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       </div>
 
       {/* DMI/ADX Chart */}
-      <div className="mb-4" style={{ height: '200px', width: '100%' }}>
+      <div className="mb-4" style={{ height: '250px', width: '100%' }}>
         <Chart
           type="line"
           data={adxDmiChartData}
@@ -254,10 +252,14 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
               x: xAxisConfig,
               'y-indicators': {
                 ...axisConfig,
-                position: 'right' as const,
+                position: 'left' as const,
                 min: 0,
                 max: 100,
                 title: { display: true, text: 'Indicators' },
+                grid: {
+                  ...axisConfig.grid,
+                  drawOnChartArea: true,
+                },
               },
             },
             plugins: {
@@ -281,7 +283,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       </div>
 
       {/* Stochastic Chart */}
-      <div style={{ height: '200px', width: '100%' }}>
+      <div style={{ height: '250px', width: '100%' }}>
         <Chart
           type="line"
           data={stochasticChartData}
@@ -309,7 +311,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
                 title: { display: true, text: 'Stochastic' },
                 grid: {
                   ...axisConfig.grid,
-                  drawOnChartArea: false,
+                  drawOnChartArea: true,
                 },
               },
             },
