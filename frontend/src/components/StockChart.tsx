@@ -60,6 +60,8 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
           up: 'green',
           down: 'red',
         },
+        barPercentage: 0.5, // Narrower candles to prevent overlapping
+        categoryPercentage: 0.5,
         yAxisID: 'y-price',
       },
     ],
@@ -71,7 +73,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: '+DI',
         data: filteredPdi,
-        borderColor: '#3CBABA', // blue
+        borderColor: '#3CBABA',
         borderWidth: 1,
         fill: false,
         yAxisID: 'y-indicators',
@@ -81,7 +83,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: '-DI',
         data: filteredMdi,
-        borderColor: '#FF7373', // red
+        borderColor: '#FF7373',
         borderWidth: 1,
         fill: false,
         yAxisID: 'y-indicators',
@@ -91,7 +93,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: 'ADX',
         data: filteredAdx,
-        borderColor: '#FFFFFF', // white
+        borderColor: '#FFFFFF',
         borderWidth: 1,
         fill: false,
         yAxisID: 'y-indicators',
@@ -107,7 +109,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: '%K',
         data: filteredK,
-        borderColor: '#3CBABA', // blue
+        borderColor: '#3CBABA',
         borderWidth: 1,
         fill: false,
         yAxisID: 'y-stochastic',
@@ -117,7 +119,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {
         label: '%D',
         data: filteredD,
-        borderColor: '#FF7373', // red
+        borderColor: '#FF7373',
         borderWidth: 1,
         fill: false,
         yAxisID: 'y-stochastic',
@@ -144,7 +146,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
     type: 'linear' as const,
     grid: {
       drawOnChartArea: true,
-      color: '#333333', // Dark gray for grid
+      color: '#333333',
     },
     ticks: {
       stepSize: 20,
@@ -342,4 +344,3 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
 };
 
 export default StockChart;
-
