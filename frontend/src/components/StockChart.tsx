@@ -1,12 +1,15 @@
-import { Line } from 'react-chartjs-2';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend } from 'chart.js';
 import AnnotationPlugin from 'chartjs-plugin-annotation';
+import 'chartjs-chart-financial'; // Import the financial chart plugin
+import { Chart } from 'react-chartjs-2';
 import { StockAnalysisResult } from '../types';
 import { useState } from 'react';
+import { DateTime } from 'luxon';
+
+ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, AnnotationPlugin);
 
 ChartJS.defaults.color = '#D1D5DB';
 ChartJS.defaults.font.family = 'Inter, sans-serif';
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, AnnotationPlugin);
 
 interface StockChartProps {
   stockData: StockAnalysisResult | null;
@@ -14,31 +17,60 @@ interface StockChartProps {
 
 export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const [selectedPeriod, setSelectedPeriod] = useState<'1m' | '3m' | '6m'>('6m');
 
   if (!stockData || !stockData.historicalDates || !stockData.historicalClosePrices) {
-    return <div className="text-slate-400 text-center">No chart data available.</div>;
+    return <div className="text-gray-400 text-center">No chart data available.</div>;
   }
 
-  const dates = stockData.historicalDates;
-  const minDate = dates[0];
-  const maxDate = dates[dates.length - 1];
+  // Filter data based on selected period
+  const now = DateTime.now();
+  const minDate = now.minus({ months: selectedPeriod === '1m' ? 1 : selectedPeriod === '3m' ? 3 : 6 }).toISODate();
 
-  const adxDmiChartData = {
-    labels: dates,
+  const filteredIndices = stockData.historicalDates.map((date, index) => (date >= minDate ? index : -1)).filter(i => i >= 0);
+
+  const filteredDates = filteredIndices.map(i => stockData.historicalDates![i]);
+  const filteredOpen = filteredIndices.map(i => stockData.ohlcv[i].open);
+  const filteredHigh = filteredIndices.map(i => stockData.ohlcv[i].high);
+  const filteredLow = filteredIndices.map(i => stockData.ohlcv[i].low);
+  const filteredClose = filteredIndices.map(i => stockData.historicalClosePrices![i]);
+  const filteredAdx = filteredIndices.map(i => stockData.historicalAdx![i]);
+  const filteredPdi = filteredIndices.map(i => stockData.historicalPdi![i]);
+  const filteredMdi = filteredIndices.map(i => stockData.historicalMdi![i]);
+  const filteredK = filteredIndices.map(i => stockData.historicalK![i]);
+  const filteredD = filteredIndices.map(i => stockData.historicalD![i]);
+
+  const priceChartData = {
+    labels: filteredDates,
     datasets: [
       {
-        label: 'Close Price',
-        data: stockData.historicalClosePrices,
-        borderColor: '#ffffff',
-        fill: false,
+        type: 'candlestick' as const,
+        label: 'Price',
+        data: filteredIndices.map(i => ({
+          x: filteredDates[i],
+          o: filteredOpen[i],
+          h: filteredHigh[i],
+          l: filteredLow[i],
+          c: filteredClose[i],
+        })),
+        borderColor: 'transparent',
+        color: {
+          up: 'white',
+          down: 'black',
+        },
         yAxisID: 'y-price',
-        pointRadius: 0,
-        pointHoverRadius: 5,
       },
+    ],
+  };
+
+  const adxDmiChartData = {
+    labels: filteredDates,
+    datasets: [
       {
         label: '+DI',
-        data: stockData.historicalPdi || [],
-        borderColor: '#3b82f6',
+        data: filteredPdi,
+        borderColor: '#9CA3AF', // gray-400
+        borderWidth: 1, // Thinner lines (50% of default 2)
         fill: false,
         yAxisID: 'y-indicators',
         pointRadius: 0,
@@ -46,8 +78,9 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       },
       {
         label: '-DI',
-        data: stockData.historicalMdi || [],
-        borderColor: '#ef4444',
+        data: filteredMdi,
+        borderColor: '#6B7280', // gray-500
+        borderWidth: 1,
         fill: false,
         yAxisID: 'y-indicators',
         pointRadius: 0,
@@ -55,24 +88,25 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       },
       {
         label: 'ADX',
-        data: stockData.historicalAdx || [],
-        borderColor: '#3ded97',
+        data: filteredAdx,
+        borderColor: '#4B5563', // gray-600
+        borderWidth: 1,
         fill: false,
         yAxisID: 'y-indicators',
         pointRadius: 0,
         pointHoverRadius: 5,
       },
-
     ],
   };
 
   const stochasticChartData = {
-    labels: dates,
+    labels: filteredDates,
     datasets: [
       {
         label: '%K',
-        data: stockData.historicalK || [],
-        borderColor: '#3b82f6',
+        data: filteredK,
+        borderColor: '#9CA3AF', // gray-400
+        borderWidth: 1,
         fill: false,
         yAxisID: 'y-stochastic',
         pointRadius: 0,
@@ -80,8 +114,9 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       },
       {
         label: '%D',
-        data: stockData.historicalD || [],
-        borderColor: '#ef4444',
+        data: filteredD,
+        borderColor: '#6B7280', // gray-500
+        borderWidth: 1,
         fill: false,
         yAxisID: 'y-stochastic',
         pointRadius: 0,
@@ -92,8 +127,6 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
 
   const xAxisConfig = {
     type: 'category' as const,
-    min: minDate,
-    max: maxDate,
     ticks: {
       autoSkip: true,
       maxTicksLimit: 10,
@@ -109,11 +142,11 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
     type: 'linear' as const,
     grid: {
       drawOnChartArea: true,
-      color: 'rgb(51, 65, 85)', // slate-700
+      color: 'rgb(75, 85, 99)', // gray-600
     },
     ticks: {
       stepSize: 20,
-      callback: (value: number) => value.toFixed(0),
+      callback: (value: number | string): string => Number(value).toFixed(0),
     },
   };
 
@@ -128,9 +161,24 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
 
   return (
     <div className="w-full max-w-[1200px] mx-auto">
+      {/* Period Selector */}
+      <div className="mb-4 flex justify-end">
+        <select
+          value={selectedPeriod}
+          onChange={(e) => setSelectedPeriod(e.target.value as '1m' | '3m' | '6m')}
+          className="p-2 bg-gray-700 text-gray-300 rounded-lg focus:ring-2 focus:ring-gray-500"
+        >
+          <option value="1m">1 Month</option>
+          <option value="3m">3 Months</option>
+          <option value="6m">6 Months</option>
+        </select>
+      </div>
+
+      {/* Price Chart */}
       <div className="mb-4" style={{ height: '400px', width: '100%' }}>
-        <Line
-          data={adxDmiChartData}
+        <Chart
+          type="candlestick"
+          data={priceChartData}
           options={{
             responsive: true,
             maintainAspectRatio: false,
@@ -138,7 +186,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
               mode: 'index',
               intersect: false,
             },
-            onHover: (event, elements) => {
+            onHover: (event: any, elements: any[]) => {
               if (elements.length > 0) {
                 setHoverIndex(elements[0].index);
               } else {
@@ -154,12 +202,55 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
                 ticks: {
                   ...axisConfig.ticks,
                   stepSize: undefined,
+                  callback: (value: number | string): string => Number(value).toFixed(2),
                 },
                 grid: {
                   ...axisConfig.grid,
                   drawOnChartArea: false, // Only right axis draws grid
                 },
               },
+            },
+            plugins: {
+              tooltip: {
+                enabled: true,
+                backgroundColor: 'rgba(30, 41, 59, 0.9)',
+                titleColor: '#D1D5DB',
+                bodyColor: '#D1D5DB',
+              },
+              legend: {
+                labels: {
+                  color: '#D1D5DB',
+                },
+              },
+              annotation: {
+                annotations: hoverLine ? [hoverLine] : [],
+              },
+            },
+          }}
+        />
+      </div>
+
+      {/* DMI/ADX Chart */}
+      <div className="mb-4" style={{ height: '200px', width: '100%' }}>
+        <Chart
+          type="line"
+          data={adxDmiChartData}
+          options={{
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+              mode: 'index',
+              intersect: false,
+            },
+            onHover: (event: any, elements: any[]) => {
+              if (elements.length > 0) {
+                setHoverIndex(elements[0].index);
+              } else {
+                setHoverIndex(null);
+              }
+            },
+            scales: {
+              x: xAxisConfig,
               'y-indicators': {
                 ...axisConfig,
                 position: 'right' as const,
@@ -187,8 +278,11 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
           }}
         />
       </div>
+
+      {/* Stochastic Chart */}
       <div style={{ height: '200px', width: '100%' }}>
-        <Line
+        <Chart
+          type="line"
           data={stochasticChartData}
           options={{
             responsive: true,
@@ -197,7 +291,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
               mode: 'index',
               intersect: false,
             },
-            onHover: (event, elements) => {
+            onHover: (event: any, elements: any[]) => {
               if (elements.length > 0) {
                 setHoverIndex(elements[0].index);
               } else {
@@ -216,13 +310,6 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
                   ...axisConfig.grid,
                   drawOnChartArea: false,
                 },
-              },
-              'y-d': {
-                ...axisConfig,
-                position: 'right' as const,
-                min: 0,
-                max: 100,
-                title: { display: true, text: ' ' },
               },
             },
             plugins: {
