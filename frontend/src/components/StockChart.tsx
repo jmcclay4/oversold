@@ -1,12 +1,13 @@
-import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend } from 'chart.js';
+import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, LineController } from 'chart.js';
 import AnnotationPlugin from 'chartjs-plugin-annotation';
 import 'chartjs-chart-financial'; // Import the financial chart plugin
 import { Chart } from 'react-chartjs-2';
+import { CandlestickController, CandlestickElement } from 'chartjs-chart-financial';
 import { StockAnalysisResult } from '../types';
 import { useState } from 'react';
 import { DateTime } from 'luxon';
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, AnnotationPlugin);
+ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, AnnotationPlugin, LineController, CandlestickController, CandlestickElement);
 
 ChartJS.defaults.color = '#D1D5DB';
 ChartJS.defaults.font.family = 'Inter, sans-serif';
@@ -53,11 +54,11 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
           l: filteredLow[i],
           c: filteredClose[i],
         })),
-        borderColor: 'transparent',
         color: {
           up: 'white',
           down: 'black',
         },
+        borderColor: 'transparent',
         yAxisID: 'y-price',
       },
     ],
