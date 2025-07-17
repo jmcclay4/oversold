@@ -12,6 +12,7 @@ import os
 import numpy as np
 import time
 import importlib
+import pandas_ta as ta
 
 # Import S&P 500 tickers for initial population or fallback
 SP500_TICKERS = []  # Replace with actual list or import from sp500_tickers.py
@@ -129,69 +130,34 @@ def migrate_db():
 
 def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Calculates technical indicators for a DataFrame:
-    - ADX (Average Directional Index, 9-day)
-    - +DI (Plus Directional Indicator, 9-day)
-    - -DI (Minus Directional Indicator, 9-day)
-    - Stochastic %K (9-day, slow with 3,3 smoothing) and %D (3-day SMA)
-    Uses Wilder's smoothing for DMI/ADX, simple moving average for stochastic.
-    Converts outputs to float32 for memory efficiency.
+    Calculates technical indicators for a DataFrame using pandas-ta:
+    - ADX (9-period)
+    - +DI (9-period)
+    - -DI (9-period)
+    - Stochastic %K (9-period, slow with 3,3 smoothing) and %D (3-period SMA)
     Expects lowercase columns: 'open', 'high', 'low', 'close', 'volume'.
     """
-    logger.info(f"Calculating technical indicators for DF with {len(df)} rows")
+    logger.info(f"Calculating technical indicators for DF with {len(df)} rows using pandas-ta")
     try:
-        # Extract price series (lowercase columns)
-        high = df['high']
-        low = df['low']
-        close = df['close']
+        # DMI/ADX (9-period)
+        dmi = ta.adx(df['high'], df['low'], df['close'], length=9)
+        df['adx'] = dmi['ADX_9']
+        df['pdi'] = dmi['DMP_9']
+        df['mdi'] = dmi['DMN_9']
         
-        # Periods
-        period_dmi_adx = 9
-        period_stoch = 9
-        period_slow = 3
+        # Stochastic (9,3,3)
+        stoch = ta.stoch(df['high'], df['low'], df['close'], k=9, d=3, smooth_k=3)
+        df['k'] = stoch['STOCHk_9_3_3']
+        df['d'] = stoch['STOCHd_9_3_3']
         
-        # DMI/ADX (9,9) with Wilder's smoothing
-        delta_high = high.diff()
-        delta_low = low.diff()
-        tr = pd.concat([high - low, abs(high - close.shift()), abs(low - close.shift())], axis=1).max(axis=1)
-        
-        # Calculate +DM and -DM with mutual exclusivity
-        plus_dm = delta_high.where((delta_high > 0) & (delta_high > delta_low.abs()), 0)
-        minus_dm = delta_low.abs().where((delta_low > 0) & (delta_low.abs() > delta_high), 0)
-        
-        # Wilder's smoothing function
-        def wilder_smooth(series, period):
-            smoothed = series.copy()
-            smoothed.iloc[period - 1] = series.iloc[:period].mean()  # First value is simple mean
-            for i in range(period, len(series)):
-                smoothed.iloc[i] = (smoothed.iloc[i-1] * (period - 1) + series.iloc[i]) / period
-            return smoothed
-        
-        smoothed_plus_dm = wilder_smooth(plus_dm, period_dmi_adx)
-        smoothed_minus_dm = wilder_smooth(minus_dm, period_dmi_adx)
-        smoothed_tr = wilder_smooth(tr, period_dmi_adx)
-        
-        # Calculate +DI and -DI
-        plus_di = 100 * smoothed_plus_dm / smoothed_tr
-        minus_di = 100 * smoothed_minus_dm / smoothed_tr
-        
-        # Calculate DX and ADX
-        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
-        adx = wilder_smooth(dx, period_dmi_adx)
-        
-        # Stochastic (9,3,3) - Slow Stochastic
-        lowest_low = low.rolling(window=period_stoch).min()
-        highest_high = high.rolling(window=period_stoch).max()
-        k_fast = 100 * (close - lowest_low) / (highest_high - lowest_low)
-        k_slow = k_fast.rolling(window=period_slow).mean()  # Slow %K = SMA(Fast %K, 3)
-        d = k_slow.rolling(window=period_slow).mean()  # %D = SMA(Slow %K, 3)
-        
-        # Assign indicators to DF, using float32 to save memory
-        df['adx'] = adx.astype('float32') if adx.notnull().any() else np.nan
-        df['pdi'] = plus_di.astype('float32') if plus_di.notnull().any() else np.nan
-        df['mdi'] = minus_di.astype('float32') if minus_di.notnull().any() else np.nan
-        df['k'] = k_slow.astype('float32') if k_slow.notnull().any() else np.nan  # Slow %K
-        df['d'] = d.astype('float32') if d.notnull().any() else np.nan
+        # Clean NaN/inf
+        df = df.replace([np.inf, -np.inf], np.nan).astype({
+            'adx': 'float32',
+            'pdi': 'float32',
+            'mdi': 'float32',
+            'k': 'float32',
+            'd': 'float32'
+        })
         
         return df
     except Exception as e:
@@ -212,7 +178,7 @@ def compute_signals(df: pd.DataFrame) -> tuple[int, int]:
     prev = df.iloc[-2]
     prev_prev = df.iloc[-3]
     
-    # DMI Signal
+    # DMI Signal (using pandas-ta column names)
     pdi = latest['pdi'] if pd.notna(latest['pdi']) else None
     mdi = latest['mdi'] if pd.notna(latest['mdi']) else None
     prev_pdi = prev['pdi'] if pd.notna(prev['pdi']) else None
