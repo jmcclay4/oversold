@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { StockAnalysisResult, OHLCV, LivePrice } from '../types';
 import { ADX_TREND_STRENGTH_THRESHOLD } from '../constants';
@@ -15,20 +14,20 @@ interface StockAnalysisTableProps {
   onRefreshLivePrices: () => void;
 }
 
-const getSignalColor = (tag: string, error?: string): string => {
-  if (error) return 'bg-red-700 text-red-100';
-  if (tag === 'DMI') return 'bg-teal-500 text-teal-100';
-  if (tag === 'ADX') return 'bg-blue-500 text-blue-100';
-  if (tag === 'STO') return 'bg-purple-500 text-purple-100';
-  return 'bg-yellow-700 text-yellow-100';
+const getSignalStyle = (tag: string, error?: string): React.CSSProperties => {
+  if (error) return { backgroundColor: '#FF7373', color: '#D1D5DB' };
+  if (tag === 'DMI') return { backgroundColor: '#3CBABA', color: '#D1D5DB' };
+  if (tag === 'ADX') return { backgroundColor: '#3CBABA', color: '#D1D5DB' };
+  if (tag === 'STO') return { backgroundColor: '#FF7373', color: '#D1D5DB' };
+  return { backgroundColor: '#333333', color: '#D1D5DB' };
 };
 
-const getPriceColor = (price: number | null | undefined, close: number | null | undefined): string => {
-  if (price == null || close == null) return 'text-slate-500';
+const getPriceStyle = (price: number | null | undefined, close: number | null | undefined): React.CSSProperties => {
+  if (price == null || close == null) return { color: '#6B7280' };
   const diff = ((price - close) / close) * 100;
-  if (diff > 0.5) return 'text-green-400';
-  if (diff < -0.5) return 'text-red-400';
-  return 'text-slate-300';
+  if (diff > 0.5) return { color: 'green' };
+  if (diff < -0.5) return { color: 'red' };
+  return { color: '#D1D5DB' };
 };
 
 const formatPrice = (price?: number | null) => price != null ? price.toFixed(2) : '-';
@@ -38,9 +37,9 @@ const formatPercent = (price?: number | null, close?: number | null) => {
 };
 
 const OhlcvDisplay: React.FC<{ ohlcv?: OHLCV }> = ({ ohlcv }) => {
-  if (!ohlcv) return <span className="text-slate-500">-</span>;
+  if (!ohlcv) return <span style={{ color: '#6B7280' }}>-</span>;
   return (
-    <div className="text-xs text-slate-400">
+    <div style={{ fontSize: '12px', color: '#6B7280' }}>
       <div>O: {ohlcv.open.toFixed(2)} H: {ohlcv.high.toFixed(2)}</div>
       <div>L: {ohlcv.low.toFixed(2)} C: {ohlcv.close.toFixed(2)}</div>
       <div>V: {ohlcv.volume.toLocaleString()}</div>
@@ -60,119 +59,119 @@ export const StockAnalysisTable: React.FC<StockAnalysisTableProps> = ({
   onRefreshLivePrices
 }) => {
   if (results.length === 0) {
-    return <p className="text-center text-slate-400 py-4">No analysis results to display.</p>;
+    return <p style={{ textAlign: 'center', color: '#6B7280', padding: '16px' }}>No analysis results to display.</p>;
   }
   
-  const headerCellClass = "px-3 py-3 pb-0 text-left text-xs font-medium text-slate-300 uppercase tracking-wider sticky top-0 z-10 bg-slate-900";
-  const updateCellClass = "px-3 py-1 text-[10px] text-left font-medium text-slate-300 uppercase tracking-wider mt-0 bg-slate-900";
+  const headerCellStyle: React.CSSProperties = { padding: '12px 12px 0 12px', textAlign: 'left', fontSize: '12px', fontWeight: 500, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky' as 'sticky', top: 0, zIndex: 10, backgroundColor: '#1a1a1a' };
+  const updateCellStyle: React.CSSProperties = { padding: '4px 12px', fontSize: '10px', textAlign: 'left', fontWeight: 500, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 0, backgroundColor: '#1a1a1a' };
 
   return (
-    <div className="bg-slate-800 shadow-2xl rounded-xl overflow-hidden mt-6">
-      <div className="overflow-x-auto max-h-[60vh]">
-        <table className="min-w-full divide-y divide-slate-700">
-          <thead className="bg-slate-900">
+    <div style={{ backgroundColor: '#1a1a1a', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)', borderRadius: '12px', overflow: 'hidden', marginTop: '24px' }}>
+      <div style={{ overflowX: 'auto', maxHeight: '60vh' }}>
+        <table style={{ minWidth: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
+          <thead style={{ backgroundColor: '#1a1a1a' }}>
             <tr>
-              <th scope="col" className={`${headerCellClass} text-center`}>Fav</th>
-              <th scope="col" className={headerCellClass}>Ticker</th>
-              <th scope="col" className={`${headerCellClass} bg-slate-800 flex justify-start items-center`}>
+              <th scope="col" style={{...headerCellStyle, textAlign: 'center'}}>Fav</th>
+              <th scope="col" style={headerCellStyle}>Ticker</th>
+              <th scope="col" style={{...headerCellStyle, backgroundColor: '#1a1a1a', display: 'flex', justifyContent: 'flex-start', alignItems: 'center' }}>
                 <button
                   onClick={(e) => { e.stopPropagation(); onRefreshLivePrices(); }}
-                  className="px-1 py-0.5 bg-slate-800 text-slate-300 text-sx rounded hover:bg-slate-600"
+                  style={{ padding: '2px 4px', backgroundColor: '#1a1a1a', color: '#D1D5DB', fontSize: '10px', borderRadius: '4px', cursor: 'pointer' }}
                   aria-label="Refresh live prices"
                 >
                   PRICE ⟳
                 </button>
               </th>
-              <th scope="col" className={`${headerCellClass} bg-slate-800`}>∆</th>
-              <th scope="col" className={headerCellClass}>Close</th>
-              <th scope="col" className={headerCellClass}>ADX</th>
-              <th scope="col" className={headerCellClass}>+DI</th>
-              <th scope="col" className={headerCellClass}>-DI</th>
-              <th scope="col" className={headerCellClass}>%K</th>
-              <th scope="col" className={headerCellClass}>%D</th>
-              <th scope="col" className={`${headerCellClass} min-w-[150px]`}>Latest OHLCV</th>
-              <th scope="col" className={`${headerCellClass} min-w-[200px]`}>Signals</th>
+              <th scope="col" style={{...headerCellStyle, backgroundColor: '#1a1a1a'}}>∆</th>
+              <th scope="col" style={headerCellStyle}>Close</th>
+              <th scope="col" style={headerCellStyle}>ADX</th>
+              <th scope="col" style={headerCellStyle}>+DI</th>
+              <th scope="col" style={headerCellStyle}>-DI</th>
+              <th scope="col" style={headerCellStyle}>%K</th>
+              <th scope="col" style={headerCellStyle}>%D</th>
+              <th scope="col" style={{...headerCellStyle, minWidth: '150px'}}>Latest OHLCV</th>
+              <th scope="col" style={{...headerCellStyle, minWidth: '200px'}}>Signals</th>
             </tr>
-            <tr className="bg-slate-900">
-              <td className={`${updateCellClass} text-center`}></td>
-              <td className={updateCellClass}></td>
-              <td className={`${updateCellClass} bg-slate-800 text-slate-400`}>{lastLiveUpdate || '-'}</td>
-              <td className={`${updateCellClass} bg-slate-800 text-slate-400`}></td>
-              <td className={updateCellClass}>{lastOhlcvUpdate || '-'}</td>
-              <td className={updateCellClass}></td>
-              <td className={updateCellClass}></td>
-              <td className={updateCellClass}></td>
-              <td className={updateCellClass}></td>
-              <td className={updateCellClass}></td>
-              <td className={`${updateCellClass} min-w-[150px]`}></td>
-              <td className={`${updateCellClass} min-w-[200px]`}></td>
+            <tr style={{ backgroundColor: '#1a1a1a' }}>
+              <td style={{...updateCellStyle, textAlign: 'center'}}></td>
+              <td style={updateCellStyle}></td>
+              <td style={{...updateCellStyle, backgroundColor: '#1a1a1a', color: '#6B7280'}}>{lastLiveUpdate || '-'}</td>
+              <td style={{...updateCellStyle, backgroundColor: '#1a1a1a', color: '#6B7280'}}></td>
+              <td style={updateCellStyle}>{lastOhlcvUpdate || '-'}</td>
+              <td style={updateCellStyle}></td>
+              <td style={updateCellStyle}></td>
+              <td style={updateCellStyle}></td>
+              <td style={updateCellStyle}></td>
+              <td style={updateCellStyle}></td>
+              <td style={{...updateCellStyle, minWidth: '150px'}}></td>
+              <td style={{...updateCellStyle, minWidth: '200px'}}></td>
             </tr>
           </thead>
-          <tbody className="bg-slate-800 divide-y divide-slate-700">
+          <tbody style={{ backgroundColor: '#1a1a1a', borderTop: '1px solid #333333' }}>
             {results.map((result) => (
               <tr 
                 key={result.ticker} 
-                className={`
-                  ${result.error ? 'bg-red-900 bg-opacity-20' : ''} 
-                  ${selectedTickerForChart === result.ticker ? 'bg-sky-700 bg-opacity-30' : 'hover:bg-slate-700'}
-                  transition-colors group cursor-pointer
-                `}
+                style={{
+                  backgroundColor: result.error ? 'rgba(255, 0, 0, 0.1)' : '',
+                  transition: 'background-color 0.3s',
+                  cursor: 'pointer',
+                }}
                 onClick={() => onRowClick(result.ticker)}
               >
-                <td className="px-3 py-3 whitespace-nowrap text-center">
+                <td style={{ padding: '12px', whiteSpace: 'nowrap', textAlign: 'center' }}>
                   <button 
                     onClick={(e) => { e.stopPropagation(); onToggleFavorite(result.ticker); onRefreshLivePrices();}}
-                    className={`text-2xl ${favoriteTickers.has(result.ticker) ? 'text-yellow-400' : 'text-slate-600 hover:text-yellow-500'} transition-colors`}
+                    style={{ fontSize: '24px', color: favoriteTickers.has(result.ticker) ? '#E5E7EB' : '#6B7280', transition: 'color 0.3s' }}
                     aria-label={favoriteTickers.has(result.ticker) ? `Unfavorite ${result.ticker}` : `Favorite ${result.ticker}`}
                   >
                     {favoriteTickers.has(result.ticker) ? '★' : '☆'}
                   </button>
                 </td>
-                <td className="px-3 py-3 whitespace-nowrap">
-                  <div className={`text-sm font-semibold ${favoriteTickers.has(result.ticker) ? 'text-sky-300' : 'text-slate-100'}`}>{result.ticker}</div>
-                  <div className="text-xs text-slate-400">{result.companyName || '-'}</div>
+                <td style={{ padding: '12px', whiteSpace: 'nowrap' }}>
+                  <div style={{ fontSize: '14px', fontWeight: '600', color: favoriteTickers.has(result.ticker) ? '#D1D5DB' : '#D1D5DB' }}>{result.ticker}</div>
+                  <div style={{ fontSize: '12px', color: '#6B7280' }}>{result.companyName || '-'}</div>
                 </td>
-                <td className={`px-3 py-3 whitespace-nowrap text-sm bg-slate-700 ${getPriceColor(livePrices[result.ticker]?.price, result.latestOhlcvDataPoint?.close)}`}>
+                <td style={{ padding: '12px', whiteSpace: 'nowrap', fontSize: '14px', backgroundColor: '#1a1a1a', ...getPriceStyle(livePrices[result.ticker]?.price, result.latestOhlcvDataPoint?.close) }}>
                   {formatPrice(livePrices[result.ticker]?.price)}
                 </td>
-                <td className="px-3 py-3 whitespace-nowrap text-sm bg-slate-700 text-slate-300">
+                <td style={{ padding: '12px', whiteSpace: 'nowrap', fontSize: '14px', backgroundColor: '#1a1a1a', color: '#D1D5DB' }}>
                   {formatPercent(livePrices[result.ticker]?.price, result.latestOhlcvDataPoint?.close)}
                 </td>
-                <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-300">
+                <td style={{ padding: '12px', whiteSpace: 'nowrap', fontSize: '14px', color: '#D1D5DB' }}>
                   {formatPrice(result.latestOhlcvDataPoint?.close)}
                 </td>
-                <td className={`px-3 py-3 whitespace-nowrap text-sm ${result.latestIndicators && result.latestIndicators.adx != null && result.latestIndicators.adx > ADX_TREND_STRENGTH_THRESHOLD ? 'text-green-400 font-medium' : 'text-slate-300'}`}>
+                <td style={{ padding: '12px', whiteSpace: 'nowrap', fontSize: '14px', color: result.latestIndicators && result.latestIndicators.adx != null && result.latestIndicators.adx > ADX_TREND_STRENGTH_THRESHOLD ? 'green' : '#D1D5DB' }}>
                   {result.latestIndicators?.adx != null ? result.latestIndicators.adx.toFixed(2) : '-'}
                 </td>
-                <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-300">
+                <td style={{ padding: '12px', whiteSpace: 'nowrap', fontSize: '14px', color: '#D1D5DB' }}>
                   {result.latestIndicators?.pdi != null ? result.latestIndicators.pdi.toFixed(2) : '-'}
                 </td>
-                <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-300">
+                <td style={{ padding: '12px', whiteSpace: 'nowrap', fontSize: '14px', color: '#D1D5DB' }}>
                   {result.latestIndicators?.mdi != null ? result.latestIndicators.mdi.toFixed(2) : '-'}
                 </td>
-                <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-300">
+                <td style={{ padding: '12px', whiteSpace: 'nowrap', fontSize: '14px', color: '#D1D5DB' }}>
                   {result.latestIndicators?.k != null ? result.latestIndicators.k.toFixed(2) : '-'}
                 </td>
-                <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-300">
+                <td style={{ padding: '12px', whiteSpace: 'nowrap', fontSize: '14px', color: '#D1D5DB' }}>
                   {result.latestIndicators?.d != null ? result.latestIndicators.d.toFixed(2) : '-'}
                 </td>
-                <td className="px-3 py-3 whitespace-nowrap">
+                <td style={{ padding: '12px', whiteSpace: 'nowrap' }}>
                   <OhlcvDisplay ohlcv={result.latestOhlcvDataPoint} />
                 </td>
-                <td className="px-3 py-3 whitespace-normal text-sm max-w-xs">
-                  <div className="flex gap-2 flex-wrap">
+                <td style={{ padding: '12px', whiteSpace: 'normal', fontSize: '14px', maxWidth: '10rem' }}>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                     {result.error ? (
-                      <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getSignalColor('', result.error)}`}>
+                      <span style={{ padding: '4px 8px', display: 'inline-flex', fontSize: '12px', lineHeight: '20px', fontWeight: '600', borderRadius: '9999px', backgroundColor: '#FF7373', color: '#D1D5DB' }}>
                         Error
                       </span>
                     ) : result.statusTags.length > 0 ? (
                       result.statusTags.map(tag => (
-                        <span key={tag} className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getSignalColor(tag)}`}>
+                        <span key={tag} style={{ padding: '4px 8px', display: 'inline-flex', fontSize: '12px', lineHeight: '20px', fontWeight: '600', borderRadius: '9999px', ...getSignalStyle(tag) }}>
                           {tag}
                         </span>
                       ))
                     ) : (
-                      <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getSignalColor('')}`}>
+                      <span style={{ padding: '4px 8px', display: 'inline-flex', fontSize: '12px', lineHeight: '20px', fontWeight: '600', borderRadius: '9999px', backgroundColor: '#333333', color: '#D1D5DB' }}>
                         -
                       </span>
                     )}
