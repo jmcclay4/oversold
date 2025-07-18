@@ -2,9 +2,9 @@ import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement
 import AnnotationPlugin from 'chartjs-plugin-annotation';
 import 'chartjs-chart-financial';
 import { CandlestickController, CandlestickElement } from 'chartjs-chart-financial';
-import { Chart } from 'react-chartjs-2';
+import { Chart, ChartTypeRegistry } from 'react-chartjs-2';
 import { StockAnalysisResult } from '../types';
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { DateTime } from 'luxon';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, AnnotationPlugin, LineController, CandlestickController, CandlestickElement);
@@ -16,6 +16,10 @@ interface StockChartProps {
 export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [selectedPeriod, setSelectedPeriod] = useState<'1m' | '3m' | '6m'>('6m');
+
+  const priceChartRef = useRef<Chart<keyof ChartTypeRegistry, any[], unknown> | null>(null);
+  const adxChartRef = useRef<Chart<keyof ChartTypeRegistry, any[], unknown> | null>(null);
+  const stochasticChartRef = useRef<Chart<keyof ChartTypeRegistry, any[], unknown> | null>(null);
 
   if (!stockData || !stockData.historicalDates || !stockData.historicalClosePrices) {
     return <div style={{color: '#D1D5DB', textAlign: 'center'}}>No chart data available.</div>;
@@ -36,6 +40,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
   const filteredHigh = filteredIndices.map(i => stockData.ohlcv[i].high);
   const filteredLow = filteredIndices.map(i => stockData.ohlcv[i].low);
   const filteredClose = filteredIndices.map(i => stockData.historicalClosePrices![i]);
+  const filteredVolume = filteredIndices.map(i => stockData.ohlcv[i].volume);
   const filteredAdx = filteredIndices.map(i => stockData.historicalAdx![i]);
   const filteredPdi = filteredIndices.map(i => stockData.historicalPdi![i]);
   const filteredMdi = filteredIndices.map(i => stockData.historicalMdi![i]);
@@ -61,6 +66,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
           h: filteredHigh[idx],
           l: filteredLow[idx],
           c: filteredClose[idx],
+          v: filteredVolume[idx],
         })),
         borderColor: 'transparent',
         color: {
@@ -68,7 +74,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
           down: 'red',
         },
         barPercentage: barPercentage,
-        categoryPercentage: barPercentage, // Adjust categoryPercentage similarly for consistency
+        categoryPercentage: barPercentage,
         yAxisID: 'y-price',
       },
     ],
@@ -170,10 +176,50 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
     drawOnChartArea: true,
   } : undefined;
 
+  useEffect(() => {
+    const updateActiveElements = () => {
+      if (hoverIndex !== null) {
+        // For price chart (1 dataset)
+        priceChartRef.current?.setActiveElements([{ datasetIndex: 0, index: hoverIndex }]);
+        priceChartRef.current?.update('none');
+
+        // For ADX/DMI chart (3 datasets)
+        adxChartRef.current?.setActiveElements([
+          { datasetIndex: 0, index: hoverIndex },
+          { datasetIndex: 1, index: hoverIndex },
+          { datasetIndex: 2, index: hoverIndex }
+        ]);
+        adxChartRef.current?.update('none');
+
+        // For Stochastic chart (2 datasets)
+        stochasticChartRef.current?.setActiveElements([
+          { datasetIndex: 0, index: hoverIndex },
+          { datasetIndex: 1, index: hoverIndex }
+        ]);
+        stochasticChartRef.current?.update('none');
+      } else {
+        // Clear active elements
+        priceChartRef.current?.setActiveElements([]);
+        priceChartRef.current?.update('none');
+
+        adxChartRef.current?.setActiveElements([]);
+        adxChartRef.current?.update('none');
+
+        stochasticChartRef.current?.setActiveElements([]);
+        stochasticChartRef.current?.update('none');
+      }
+    };
+
+    updateActiveElements();
+  }, [hoverIndex]);
+
   return (
     <div style={{ width: '100%', maxWidth: '1200px', margin: '0 auto' }}>
-      {/* Price Chart with Overlay Selector */}
+      {/* Price Chart with Overlay Selector and Title */}
       <div style={{ marginBottom: '16px', position: 'relative', height: '300px', width: '100%' }}>
+        <div style={{ position: 'absolute', top: '8px', left: '50%', transform: 'translateX(-50%)', zIndex: 10, color: '#D1D5DB' }}>
+          <span style={{ fontWeight: 'bold' }}>{stockData.ticker}</span> {stockData.companyName}
+        </div>
         <div style={{ position: 'absolute', top: '8px', right: '8px', zIndex: 10 }}>
           <select
             value={selectedPeriod}
@@ -186,6 +232,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
           </select>
         </div>
         <Chart
+          ref={priceChartRef}
           type="candlestick"
           data={priceChartData}
           options={{
@@ -227,11 +274,24 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
                 backgroundColor: '#1a1a1a',
                 titleColor: '#D1D5DB',
                 bodyColor: '#D1D5DB',
+                callbacks: {
+                  label: (context) => {
+                    if (context.dataset.type === 'candlestick') {
+                      const { o, h, l, c, v } = context.raw as { o: number; h: number; l: number; c: number; v: number };
+                      return [
+                        `Open: ${o.toFixed(2)}`,
+                        `High: ${h.toFixed(2)}`,
+                        `Low: ${l.toFixed(2)}`,
+                        `Close: ${c.toFixed(2)}`,
+                        `Volume: ${Number(v).toLocaleString()}`
+                      ];
+                    }
+                    return '';
+                  },
+                },
               },
               legend: {
-                labels: {
-                  color: '#D1D5DB',
-                },
+                display: false,
               },
               annotation: {
                 annotations: hoverLine ? [hoverLine] : [],
@@ -244,6 +304,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {/* DMI/ADX Chart */}
       <div style={{ marginBottom: '16px', height: '250px', width: '100%' }}>
         <Chart
+          ref={adxChartRef}
           type="line"
           data={adxDmiChartData}
           options={{
@@ -280,6 +341,11 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
                 backgroundColor: '#1a1a1a',
                 titleColor: '#D1D5DB',
                 bodyColor: '#D1D5DB',
+                callbacks: {
+                  label: (context) => {
+                    return `${context.dataset.label}: ${Number(context.raw).toFixed(2)}`;
+                  },
+                },
               },
               legend: {
                 labels: {
@@ -297,6 +363,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
       {/* Stochastic Chart */}
       <div style={{ height: '250px', width: '100%' }}>
         <Chart
+          ref={stochasticChartRef}
           type="line"
           data={stochasticChartData}
           options={{
@@ -333,6 +400,11 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
                 backgroundColor: '#1a1a1a',
                 titleColor: '#D1D5DB',
                 bodyColor: '#D1D5DB',
+                callbacks: {
+                  label: (context) => {
+                    return `${context.dataset.label}: ${Number(context.raw).toFixed(2)}`;
+                  },
+                },
               },
               legend: {
                 labels: {
