@@ -177,15 +177,15 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
         <div style={{ position: 'absolute', top: '8px', left: '50%', transform: 'translateX(-50%)', zIndex: 10, color: '#D1D5DB', fontSize: '14px', fontWeight: '200' }}>
           <span style={{ fontWeight: 'bold' }}>{stockData.ticker || 'Ticker'}</span> {stockData.companyName || 'Full Stock Name'}
         </div>
-        <div style={{ position: 'absolute', top: '8px', right: '8px', zIndex: 10 }}>
+        <div style={{ position: 'absolute', top: '8px', right: '8px', zIndex: 10, fontSize: '10px' }}>
           <select
             value={selectedPeriod}
             onChange={(e) => setSelectedPeriod(e.target.value as '1m' | '3m' | '6m')}
             style={{ padding: '4px', backgroundColor: '#1a1a1a', color: '#D1D5DB', borderRadius: '4px', border: '1px solid #1a1a1a' }}
           >
-            <option value="1m">1m</option>
-            <option value="3m">3m</option>
-            <option value="6m">6m</option>
+            <option value="1m">1 MONTH</option>
+            <option value="3m">3 MONTHS</option>
+            <option value="6m">6 MONTHS</option>
           </select>
         </div>
         <Chart
