@@ -2,7 +2,7 @@ import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement
 import AnnotationPlugin from 'chartjs-plugin-annotation';
 import 'chartjs-chart-financial';
 import { CandlestickController, CandlestickElement } from 'chartjs-chart-financial';
-import { Chart, ChartTypeRegistry } from 'react-chartjs-2';
+import { Chart } from 'react-chartjs-2';
 import { StockAnalysisResult } from '../types';
 import { useState, useRef, useEffect } from 'react';
 import { DateTime } from 'luxon';
@@ -17,9 +17,9 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [selectedPeriod, setSelectedPeriod] = useState<'1m' | '3m' | '6m'>('6m');
 
-  const priceChartRef = useRef<Chart<keyof ChartTypeRegistry, any[], unknown> | null>(null);
-  const adxChartRef = useRef<Chart<keyof ChartTypeRegistry, any[], unknown> | null>(null);
-  const stochasticChartRef = useRef<Chart<keyof ChartTypeRegistry, any[], unknown> | null>(null);
+  const priceChartRef = useRef<any>(null);
+  const adxChartRef = useRef<any>(null);
+  const stochasticChartRef = useRef<any>(null);
 
   if (!stockData || !stockData.historicalDates || !stockData.historicalClosePrices) {
     return <div style={{color: '#D1D5DB', textAlign: 'center'}}>No chart data available.</div>;
