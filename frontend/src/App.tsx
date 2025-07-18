@@ -249,7 +249,7 @@ const App: React.FC = () => {
           />
           <button
             onClick={() => setShowMenu(!showMenu)}
-            style={{ padding: '8px 16px', backgroundColor: '#1a1a1a', color: '#D1D5DB', borderRadius: '8px', cursor: 'pointer' }}
+            style={{ padding: '8px 16px', backgroundColor: '#333333', color: '#D1D5DB', borderRadius: '8px', cursor: 'pointer' }}
           >
             Manage Stocks
           </button>
