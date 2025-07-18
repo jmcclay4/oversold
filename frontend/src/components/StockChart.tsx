@@ -57,10 +57,10 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
         label: 'Price',
         data: filteredDates.map((date, idx) => ({
           x: date,
-          o: filteredOpen[idx],
-          h: filteredHigh[idx],
-          l: filteredLow[idx],
-          c: filteredClose[idx],
+          o: filteredOpen[idx].toFixed(2),
+          h: filteredHigh[idx].toFixed(2),
+          l: filteredLow[idx].toFixed(2),
+          c: filteredClose[idx].toFixed(2),
         })),
         borderColor: 'transparent',
         color: {
@@ -177,7 +177,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
         <div style={{ position: 'absolute', top: '8px', left: '50%', transform: 'translateX(-50%)', zIndex: 10, color: '#D1D5DB', fontSize: '14px', fontWeight: '200' }}>
           <span style={{ fontWeight: 'bold' }}>{stockData.ticker || 'Ticker'}</span> {stockData.companyName || 'Full Stock Name'}
         </div>
-        <div style={{ position: 'absolute', top: '8px', right: '8px', zIndex: 10, fontSize: '10px' }}>
+        <div style={{ position: 'absolute', top: '8px', right: '8px', zIndex: 10, fontSize: '11px' }}>
           <select
             value={selectedPeriod}
             onChange={(e) => setSelectedPeriod(e.target.value as '1m' | '3m' | '6m')}
