@@ -45,7 +45,7 @@ const App: React.FC = () => {
   const toggleFavorite = useCallback((ticker: string) => {
     setFavoriteTickers(prev => {
       const newFavorites = new Set(prev);
-      if (newFavorites.has(ticker)) {
+      if (newFavorites.has(ticker) ) {
         newFavorites.delete(ticker);
       } else {
         if (newFavorites.size >= 10) {
@@ -239,7 +239,7 @@ const App: React.FC = () => {
           <StockChart stockData={selectedStockDataForChart} />
         </div>
 
-        <div style={{ margin: '16px 0', padding: '16px', backgroundColor: '#1a1a1a', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '16px', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ margin: '16px 0', padding: '16px', backgroundColor: '#1a1a1a', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)', borderRadius: '12px', display: 'flex', flexDirection: 'row', gap: '16px', alignItems: 'center', justifyContent: 'space-between' }}>
           <input
             type="text"
             placeholder="Search by ticker or company..."
