@@ -1,3 +1,4 @@
+
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, LineController } from 'chart.js';
 import AnnotationPlugin from 'chartjs-plugin-annotation';
 import 'chartjs-chart-financial';
@@ -26,10 +27,6 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
   const minDate = now.minus({ months: selectedPeriod === '1m' ? 1 : selectedPeriod === '3m' ? 3 : 6 }).toISODate();
 
   const filteredIndices = stockData.historicalDates.map((date, index) => (date >= minDate ? index : -1)).filter(i => i >= 0);
-
-  if (filteredIndices.length === 0) {
-    return <div style={{color: '#D1D5DB', textAlign: 'center'}}>No data for selected period.</div>;
-  }
 
   const filteredDates = filteredIndices.map(i => stockData.historicalDates![i]);
   const filteredOpen = filteredIndices.map(i => stockData.ohlcv[i].open);
@@ -64,8 +61,8 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
           up: 'green',
           down: 'red',
         },
-        barPercentage: 0.3, // Narrower candles
-        categoryPercentage: 0.3,
+        barPercentage: 0.2, // Even narrower candles (originally 0.5, now 0.2)
+        categoryPercentage: 0.2,
         yAxisID: 'y-price',
       },
     ],
@@ -348,4 +345,3 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
 };
 
 export default StockChart;
-
