@@ -174,7 +174,7 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
     <div style={{ width: '100%', maxWidth: '1200px', margin: '0 auto' }}>
       {/* Price Chart with Overlay Selector */}
       <div style={{ marginBottom: '16px', position: 'relative', height: '300px', width: '100%' }}>
-        <div style={{ position: 'absolute', top: '8px', left: '50%', transform: 'translateX(-50%)', zIndex: 10, color: '#D1D5DB', fontSize: '16px' }}>
+        <div style={{ position: 'absolute', top: '8px', left: '50%', transform: 'translateX(-50%)', zIndex: 10, color: '#D1D5DB', fontSize: '14px', fontWeight: '200' }}>
           <span style={{ fontWeight: 'bold' }}>{stockData.ticker || 'Ticker'}</span> {stockData.companyName || 'Full Stock Name'}
         </div>
         <div style={{ position: 'absolute', top: '8px', right: '8px', zIndex: 10 }}>
