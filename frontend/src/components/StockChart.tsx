@@ -1,3 +1,4 @@
+
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, LineController } from 'chart.js';
 import AnnotationPlugin from 'chartjs-plugin-annotation';
 import 'chartjs-chart-financial';
@@ -60,8 +61,8 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
           up: 'green',
           down: 'red',
         },
-        barPercentage: 0.5, // Narrower candles to prevent overlapping
-        categoryPercentage: 0.5,
+        barPercentage: 0.2, // Even narrower candles (originally 0.5, now 0.2)
+        categoryPercentage: 0.2,
         yAxisID: 'y-price',
       },
     ],
