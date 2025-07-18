@@ -1,4 +1,3 @@
-
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, LineController } from 'chart.js';
 import AnnotationPlugin from 'chartjs-plugin-annotation';
 import 'chartjs-chart-financial';
@@ -28,6 +27,10 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
 
   const filteredIndices = stockData.historicalDates.map((date, index) => (date >= minDate ? index : -1)).filter(i => i >= 0);
 
+  if (filteredIndices.length === 0) {
+    return <div style={{color: '#D1D5DB', textAlign: 'center'}}>No chart data available for selected period.</div>;
+  }
+
   const filteredDates = filteredIndices.map(i => stockData.historicalDates![i]);
   const filteredOpen = filteredIndices.map(i => stockData.ohlcv[i].open);
   const filteredHigh = filteredIndices.map(i => stockData.ohlcv[i].high);
@@ -43,26 +46,29 @@ export const StockChart: React.FC<StockChartProps> = ({ stockData }) => {
   const priceMin = Math.min(...filteredLow) * 0.95;
   const priceMax = Math.max(...filteredHigh) * 1.05;
 
+  // Dynamic barPercentage based on selected period
+  const barPercentage = selectedPeriod === '1m' ? 0.4 : selectedPeriod === '3m' ? 0.3 : 0.2;
+
   const priceChartData = {
     labels: filteredDates,
     datasets: [
       {
         type: 'candlestick' as const,
         label: 'Price',
-        data: filteredIndices.map(i => ({
-          x: filteredDates[i],
-          o: filteredOpen[i],
-          h: filteredHigh[i],
-          l: filteredLow[i],
-          c: filteredClose[i],
+        data: filteredDates.map((date, idx) => ({
+          x: date,
+          o: filteredOpen[idx],
+          h: filteredHigh[idx],
+          l: filteredLow[idx],
+          c: filteredClose[idx],
         })),
         borderColor: 'transparent',
         color: {
           up: 'green',
           down: 'red',
         },
-        barPercentage: 0.2, // Even narrower candles (originally 0.5, now 0.2)
-        categoryPercentage: 0.2,
+        barPercentage: barPercentage,
+        categoryPercentage: barPercentage, // Adjust categoryPercentage similarly for consistency
         yAxisID: 'y-price',
       },
     ],
